@@ -104,7 +104,7 @@ FuncDef
 FuncType
   : INT {
     auto ast = new AST::FuncType();
-    ast->type = AST::Type::INT;
+    ast->type = AST::type_t::INT;
     $$ = ast;
   }
   

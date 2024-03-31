@@ -11,9 +11,9 @@ std::string indent(int depth) {
     return std::string(depth * 4, ' ');
 }
 
-std::string type2str(Type type) {
+std::string type2str(type_t type) {
     switch (type) {
-        case Type::INT:
+        case type_t::INT:
             return "int";
         default:
             assert(0);

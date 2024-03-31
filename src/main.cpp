@@ -5,37 +5,61 @@
 #include <string>
 
 #include "frontend/ast.h"
+#include "middleend/ast2kirt.h"
+#include "middleend/kirt2strkir.h"
 
-using namespace std;
-
-// 声明 lexer 的输入, 以及 parser 函数
-// 为什么不引用 sysy.tab.hpp 呢? 因为首先里面没有 yyin 的定义
-// 其次, 因为这个文件不是我们自己写的, 而是被 Bison 生成出来的
-// 你的代码编辑器/IDE 很可能找不到这个文件, 然后会给你报错 (虽然编译不会出错)
-// 看起来会很烦人, 于是干脆采用这种看起来 dirty 但实际很有效的手段
 extern FILE *yyin;
-extern int yyparse(unique_ptr<AST::Base> &ast);
+extern int yyparse(std::unique_ptr<AST::Base> &ast);
+
+// Mode selection
+bool print_ast = false; 
+bool print_ir = false;
+bool print_asm = false;
 
 int main(int argc, const char *argv[]) {
-  // 解析命令行参数. 测试脚本/评测平台要求你的编译器能接收如下参数:
-  // compiler 模式 输入文件 -o 输出文件
   assert(argc == 5);
-  auto mode = argv[1];
+  std::string mode = std::string(argv[1]);
   auto input = argv[2];
   auto output = argv[4];
 
-  // 打开输入文件, 并且指定 lexer 在解析的时候读取这个文件
+  if (mode == "-ast") {
+    print_ast = true;
+  } else if (mode == "-koopa") {
+    print_ir = true;
+  } else if (mode == "-riscv") {
+    print_asm = true;
+  } else if (mode == "-debug") {
+    print_ast = true;
+    print_ir = true;
+    print_asm = true;
+  } else {
+    std::cerr << "Invalid mode: " << mode << std::endl;
+    assert(false);
+  }
+
+  // Read the input file
   yyin = fopen(input, "r");
   assert(yyin);
 
-  // 调用 parser 函数, parser 函数会进一步调用 lexer 解析输入文件的
-  unique_ptr<AST::Base> ast;
+  // Parse the AST
+  std::unique_ptr<AST::Base> ast;
   auto ret = yyparse(ast);
   assert(!ret);
 
-  // 输出解析得到的 AST, 其实就是个字符串
-  ast->print();
+  if (print_ast) {
+    ast->print();
+  }
   
+  KIRT::Program kirt = KIRT::ast2kirt(*static_cast<AST::CompUnit *>(ast.get()));
+  std::list<std::string> strkir = KIRT::kirt2str(kirt);
+
+  // Print KIR
+  if (print_ir) {
+    for (const std::string &line : strkir) {
+      std::cout << line << std::endl;
+    }
+  }
+
   return 0;
 }
 

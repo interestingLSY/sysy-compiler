@@ -1,3 +1,4 @@
+// ast.h - Definition of AST nodes
 #pragma once
 
 #include <string>
@@ -5,7 +6,7 @@
 
 namespace AST {
 
-enum class Type {
+enum class type_t {
 	INT
 };
 
@@ -61,7 +62,7 @@ public:
 // FuncType - The return type of a function
 class FuncType : public Base {
 public:
-	Type type;
+	type_t type;
 
 	void print(int depth) const;
 };
