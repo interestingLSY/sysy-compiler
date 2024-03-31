@@ -3,6 +3,7 @@
 #include <iostream>
 #include <memory>
 #include <string>
+#include <fstream>
 
 #include "frontend/ast.h"
 #include "middleend/ast2kirt.h"
@@ -11,16 +12,28 @@
 extern FILE *yyin;
 extern int yyparse(std::unique_ptr<AST::Base> &ast);
 
+bool print_to_file = false;
+std::ostream *output_stream = &std::cout;
+
 // Mode selection
 bool print_ast = false; 
 bool print_ir = false;
 bool print_asm = false;
 
 int main(int argc, const char *argv[]) {
-  assert(argc == 5);
+  if (argc != 5 && argc != 3) {
+    std::cerr << "Usage: " << argv[0] << " <mode> <input> [-o <output>]" << std::endl;
+    return 1;
+  }
   std::string mode = std::string(argv[1]);
   auto input = argv[2];
-  auto output = argv[4];
+  if (argc == 5) {
+    assert(std::string(argv[3]) == "-o");
+    print_to_file = true;
+    auto output_file_path = argv[4];
+    output_stream = new std::ofstream;
+    static_cast<std::ofstream *>(output_stream)->open(output_file_path);
+  }
 
   if (mode == "-ast") {
     print_ast = true;
@@ -47,6 +60,7 @@ int main(int argc, const char *argv[]) {
   assert(!ret);
 
   if (print_ast) {
+    // AST does not support print to file
     ast->print();
   }
   
@@ -56,7 +70,7 @@ int main(int argc, const char *argv[]) {
   // Print KIR
   if (print_ir) {
     for (const std::string &line : strkir) {
-      std::cout << line << std::endl;
+      *output_stream << line << std::endl;
     }
   }
 
