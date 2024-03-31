@@ -23,7 +23,16 @@ std::string type2str(Type type) {
 
 void CompUnit::print(int depth) const {
     cout << indent(depth) << "CompUnit {" << endl;
-    func_def->print(depth + 1);
+    top_level->print(depth + 1);
+    cout << indent(depth) << "}" << endl;
+}
+
+void TopLevel::print(int depth) const {
+    cout << indent(depth) << "TopLevel {" << endl;
+    def->print(depth + 1);
+    if (recur) {
+        recur->print(depth);
+    }
     cout << indent(depth) << "}" << endl;
 }
 
@@ -43,12 +52,21 @@ void FuncType::print(int depth) const {
 
 void Block::print(int depth) const {
     cout << indent(depth) << "Block {" << endl;
-    stmt->print(depth + 1);
+    body->print(depth + 1);
     cout << indent(depth) << "}" << endl;
 }
 
-void Stmt::print(int depth) const {
-    cout << indent(depth) << "Stmt {" << endl;
+void BlockBody::print(int depth) const {
+    cout << indent(depth) << "BlockBody {" << endl;
+    item->print(depth + 1);
+    if (recur) {
+        recur->print(depth);
+    }
+    cout << indent(depth) << "}" << endl;
+}
+
+void ReturnStmt::print(int depth) const {
+    cout << indent(depth) << "ReturnStmt {" << endl;
     cout << indent(depth + 1) << "number: " << number << endl;
     cout << indent(depth) << "}" << endl;
 }
