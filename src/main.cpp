@@ -8,6 +8,7 @@
 #include "frontend/ast.h"
 #include "middleend/ast2kirt.h"
 #include "middleend/kirt2strkir.h"
+#include "backend/kirt2asm.h"
 
 extern FILE *yyin;
 extern int yyparse(std::unique_ptr<AST::Base> &ast);
@@ -70,6 +71,13 @@ int main(int argc, const char *argv[]) {
   // Print KIR
   if (print_ir) {
     for (const std::string &line : strkir) {
+      *output_stream << line << std::endl;
+    }
+  }
+
+  std::list<std::string> strasm = ASM::kirt2asm(kirt);
+  if (print_asm) {
+    for (const std::string &line : strasm) {
       *output_stream << line << std::endl;
     }
   }

@@ -36,6 +36,7 @@ public:
 
 class BlockList {
 public:
+	// The first block will be considered as the entry block
 	list<Block> blocks;
 };
 
