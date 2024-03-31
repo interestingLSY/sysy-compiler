@@ -14,6 +14,7 @@ using std::string;
 
 WhiteSpace    [ \t\n\r]*
 LineComment   "//".*
+BlockComment  \/\*([^*]|(\*+[^*/]))*\*+\/
 
 Identifier    [a-zA-Z_][a-zA-Z0-9_]*
 
@@ -23,8 +24,9 @@ Hexadecimal   0[xX][0-9a-fA-F]+
 
 %%
 
-{WhiteSpace}    { /* 忽略, 不做任何操作 */ }
-{LineComment}   { /* 忽略, 不做任何操作 */ }
+{WhiteSpace}    {}
+{LineComment}   {}
+{BlockComment}	{}
 
 "int"           { return INT; }
 "return"        { return RETURN; }

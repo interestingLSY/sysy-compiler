@@ -164,8 +164,3 @@ Number
 void yyerror(std::unique_ptr<AST::Base> &ast, const char *s) {
   std::cerr << "error: " << s << std::endl;
 }
-
-/* void yyerror(std::unique_ptr<std::string> &str, const char *s) {
-  std::cerr << "error: " << s << std::endl;
-}
-  */
