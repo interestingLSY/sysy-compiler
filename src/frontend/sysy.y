@@ -11,6 +11,7 @@
 #include <string>
 
 #include "frontend/ast.h"
+#include "utils/utils.h"
 
 // 声明 lexer 函数和错误处理函数
 int yylex();
@@ -31,6 +32,16 @@ std::unique_ptr<TARGET> cast_uptr(AST::Base *base) {
   return std::unique_ptr<TARGET>(
     dynamic_cast<TARGET*>(base)
   );
+}
+
+// A counter for generating unique variable names
+// These variables are mainly unnamed useless variables, like "EXP;" statement
+// which is equivalent to "int XXXXX = EXP;"
+Counter useless_var_counter;
+std::string get_next_useless_var_name() {
+  // NOTE We use __useless__ as the prefix of the variable name. This may lead
+  // to collision if the bitch-son user named a variable in this way
+  return "__useless__" + to_string(useless_var_counter.next());
 }
 
 %}
@@ -62,7 +73,7 @@ std::unique_ptr<TARGET> cast_uptr(AST::Base *base) {
 %type <ast_val> VarDecl_ VarDef
 %type <ast_val> FuncDef Block BlockBody BlockItem_
 %type <ast_val> LVal Exp LOrExp LAndExp EqExp RelExp AddExp MulExp UnaryExp UnaryOp PrimaryExp
-%type <ast_val> Stmt ReturnStmt AssignStmt NopStmt
+%type <ast_val> Stmt ReturnStmt AssignStmt NopStmt ExpStmt
 
 %%
 
@@ -201,6 +212,9 @@ Stmt
   | NopStmt {
     $$ = $1;
   }
+  | ExpStmt {
+    $$ = $1;
+  }
 
 
 ReturnStmt
@@ -223,6 +237,16 @@ AssignStmt
 NopStmt
   : ';' {
     $$ = new AST::NopStmt();
+  }
+
+
+ExpStmt
+  : Exp ';' {
+    // EXP; <=> int XXXXX = EXP;
+    auto ast = new AST::VarDef();
+    ast->ident = get_next_useless_var_name();
+    ast->init_val = cast_uptr<AST::Exp>($1);
+    $$ = ast;
   }
 
 
