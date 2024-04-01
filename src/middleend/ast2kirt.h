@@ -21,4 +21,6 @@ BlockList ast2kirt(const AST::BlockItem &block_item);
 
 BlockList ast2kirt(const AST::Stmt &stmt);
 
+shared_ptr<Exp> ast2kirt(const AST::Exp &exp);
+
 }

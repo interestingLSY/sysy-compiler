@@ -3,10 +3,14 @@
 #include <cassert>
 #include <memory>
 
+#include "utils/utils.h"
+
 namespace KIRT {
 
-string kirt_type_t2str(type_t type_t) {
-	switch (type_t) {
+Counter temp_reg_cnter;
+
+static string kirt_type_t2str(type_t type) {
+	switch (type) {
 		case type_t::INT:
 			return "i32";
 		default:
@@ -14,6 +18,47 @@ string kirt_type_t2str(type_t type_t) {
 	}
 }
 
+static string kirt_exp_t2str(exp_t type) {
+	switch (type) {
+		case exp_t::ADD:
+			return "add";
+		case exp_t::SUB:
+			return "sub";
+		case exp_t::MUL:
+			return "mul";
+		case exp_t::DIV:
+			return "div";
+		case exp_t::REM:
+			return "mod";
+		case exp_t::LT:
+			return "lt";
+		case exp_t::GT:
+			return "gt";
+		case exp_t::LEQ:
+			return "le";
+		case exp_t::GEQ:
+			return "ge";
+		case exp_t::EQ:
+			return "eq";
+		case exp_t::NEQ:
+			return "ne";
+		case exp_t::BITWISE_AND:
+			return "and";
+		case exp_t::BITWISE_OR:
+			return "or";
+		case exp_t::BITWISE_XOR:
+			return "xor";
+		case exp_t::SHL:
+			return "shl";
+		case exp_t::SHR:
+			return "shr";
+		case exp_t::SAR:
+			return "sar";
+		default:
+			assert(0);
+	}
+
+}
 list<string> kirt2str(const Program &program) {
 	list<string> res;
 	for (const shared_ptr<Inst> &inst : program.global_defs) {
@@ -28,6 +73,7 @@ list<string> kirt2str(const Program &program) {
 }
 
 list<string> kirt2str(const Function &func) {
+	temp_reg_cnter.reset();	// Clear the register counter
 	list<string> res;
 	res.push_back("fun @" + func.name + "(): " + kirt_type_t2str(func.ret_type) + " {");
 	res.push_back("\%entry:");
@@ -66,8 +112,37 @@ list<string> kirt2str(const std::shared_ptr<Inst> &inst) {
 
 list<string> kirt2str(const ReturnInst &return_inst) {
 	list<string> res;
-	res.push_back("  ret " + std::to_string(return_inst.ret_val));
+	auto [exp_inst_list, exp_varid] = kirt2str(return_inst.ret_exp);
+	res.splice(res.end(), exp_inst_list);
+	res.push_back("  ret " + exp_varid);
 	return res;
+}
+
+pair<list<string>, string> kirt2str(const Exp &exp) {
+	if (exp.type == exp_t::NUMBER) {
+		return { {}, std::to_string(exp.number) };
+	} else {
+		assert (exp.lhs);
+		assert (exp.rhs);
+		auto [lhs_inst_list, lhs_varid] = kirt2str(*exp.lhs);
+		auto [rhs_inst_list, rhs_varid] = kirt2str(*exp.rhs);
+		string res_varid = "%" + std::to_string(temp_reg_cnter.next());
+		list<string> res;
+		res.splice(res.end(), lhs_inst_list);
+		res.splice(res.end(), rhs_inst_list);
+		// res.push_back XXX
+		res.push_back(
+			"  " + 
+			res_varid +
+			" = " + 
+			kirt_exp_t2str(exp.type) +
+			" " +
+			lhs_varid +
+			", " +
+			rhs_varid
+		);
+		return {res, res_varid};
+	}
 }
 
 }

@@ -54,7 +54,7 @@ int main(int argc, const char *argv[]) {
   // Read the input file
   yyin = fopen(input, "r");
   assert(yyin);
-
+  
   // Parse the AST
   std::unique_ptr<AST::Base> ast;
   auto ret = yyparse(ast);

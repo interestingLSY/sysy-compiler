@@ -10,6 +10,37 @@ enum class type_t {
 	INT
 };
 
+enum class exp_t {
+	NUMBER,
+
+	POSITIVE,	// This only appears in UnaryOp
+	NEGATIVE,
+	LOGICAL_NOT,
+
+	ADD,
+	SUB,
+	MUL,
+	DIV,
+	REM,
+
+	LT,
+	GT,
+	LEQ,
+	GEQ,
+	EQ,
+	NEQ,
+
+	LOGICAL_AND,
+	LOGICAL_OR
+};
+
+inline bool is_exp_t_unary(exp_t type) {
+	return type == exp_t::POSITIVE || type == exp_t::NEGATIVE || type == exp_t::LOGICAL_NOT;
+}
+inline bool is_exp_t_binary(exp_t type) {
+	return type != exp_t::NUMBER && !is_exp_t_unary(type);
+}
+
 class Base {
 public:
 	virtual ~Base() = default;
@@ -19,11 +50,15 @@ public:
 class CompUnit;
 class TopLevel;
 class TopLevelDef;
+
 class FuncDef;
 class FuncType;
+
 class Block;
 class BlockBody;
 class BlockItem;
+class Exp;
+
 class Stmt;
 class ReturnStmt;
 
@@ -93,7 +128,18 @@ class Stmt : public BlockItem {
 
 class ReturnStmt : public Stmt {
 public:
-	int number;
+	std::unique_ptr<Exp> ret_exp;
+
+	void print(int depth) const;
+};
+
+class Exp : public Base {
+public:
+	exp_t type;
+
+	int number;	// Only valid when type == NUMBER
+	std::unique_ptr<Exp> lhs;	// Valid for binary ops
+	std::unique_ptr<Exp> rhs;	// Valid for binary ops and unary ops
 
 	void print(int depth) const;
 };

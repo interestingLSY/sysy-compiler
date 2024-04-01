@@ -59,6 +59,7 @@ std::unique_ptr<TARGET> cast_uptr(AST::Base *base) {
 // 非终结符的类型定义
 %type <int_val> Number
 %type <ast_val> TopLevel TopLevelDef FuncDef FuncType Block BlockBody BlockItem
+%type <ast_val> Exp LOrExp LAndExp EqExp RelExp AddExp MulExp UnaryExp UnaryOp PrimaryExp
 %type <ast_val> Stmt ReturnStmt
 
 %%
@@ -144,12 +145,225 @@ Stmt
 
 
 ReturnStmt
-  : RETURN Number ';' {
+  : RETURN Exp ';' {
     auto ast = new AST::ReturnStmt();
-    ast->number = $2;
+    ast->ret_exp = cast_uptr<AST::Exp>($2);
     $$ = ast;
   }
   
+
+Exp
+  : LOrExp {
+    // auto ast = new AST::Exp();
+    // ast->type = AST::exp_t::NOP;
+    // ast->lhs = cast_uptr<AST::Exp>($1);
+    // $$ = ast;
+    $$ = $1;
+  }
+
+
+LOrExp
+  : LAndExp {
+    // auto ast = new AST::Exp();
+    // ast->type = AST::exp_t::NOP;
+    // ast->lhs = cast_uptr<AST::Exp>($1);
+    // $$ = ast;
+    $$ = $1;
+    // printf("%d\n", cast_uptr<AST::Exp>($1) -> type);
+  }
+  | LOrExp '|' '|' LAndExp {
+    auto ast = new AST::Exp();
+    ast->type = AST::exp_t::LOGICAL_OR;
+    ast->lhs = cast_uptr<AST::Exp>($1);
+    ast->rhs = cast_uptr<AST::Exp>($4);
+    $$ = ast;
+  }
+
+
+LAndExp
+  : EqExp {
+    // auto ast = new AST::Exp();
+    // ast->type = AST::exp_t::NOP;
+    // ast->lhs = cast_uptr<AST::Exp>($1);
+    // $$ = ast;
+    $$ = $1;
+  }
+  | LAndExp '&' '&' EqExp {
+    auto ast = new AST::Exp();
+    ast->type = AST::exp_t::LOGICAL_AND;
+    ast->lhs = cast_uptr<AST::Exp>($1);
+    ast->rhs = cast_uptr<AST::Exp>($4);
+    $$ = ast;
+  }
+
+
+EqExp
+  : RelExp {
+    // auto ast = new AST::Exp();
+    // ast->type = AST::exp_t::NOP;
+    // ast->lhs = cast_uptr<AST::Exp>($1);
+    // $$ = ast;
+    $$ = $1;
+  }
+  | EqExp '=' '=' RelExp {
+    auto ast = new AST::Exp();
+    ast->type = AST::exp_t::EQ;
+    ast->lhs = cast_uptr<AST::Exp>($1);
+    ast->rhs = cast_uptr<AST::Exp>($4);
+    $$ = ast;
+  }
+  | EqExp '!' '=' RelExp {
+    auto ast = new AST::Exp();
+    ast->type = AST::exp_t::NEQ;
+    ast->lhs = cast_uptr<AST::Exp>($1);
+    ast->rhs = cast_uptr<AST::Exp>($4);
+    $$ = ast;
+  }
+
+
+RelExp
+  : AddExp {
+    // auto ast = new AST::Exp();
+    // ast->type = AST::exp_t::NOP;
+    // ast->lhs = cast_uptr<AST::Exp>($1);
+    // $$ = ast;
+    $$ = $1;
+  }
+  | RelExp '<' AddExp {
+    auto ast = new AST::Exp();
+    ast->type = AST::exp_t::LT;
+    ast->lhs = cast_uptr<AST::Exp>($1);
+    ast->rhs = cast_uptr<AST::Exp>($3);
+    $$ = ast;
+  }
+  | RelExp '>' AddExp {
+    auto ast = new AST::Exp();
+    ast->type = AST::exp_t::GT;
+    ast->lhs = cast_uptr<AST::Exp>($1);
+    ast->rhs = cast_uptr<AST::Exp>($3);
+    $$ = ast;
+  }
+  | RelExp '<' '=' AddExp {
+    auto ast = new AST::Exp();
+    ast->type = AST::exp_t::LEQ;
+    ast->lhs = cast_uptr<AST::Exp>($1);
+    ast->rhs = cast_uptr<AST::Exp>($4);
+    $$ = ast;
+  }
+  | RelExp '>' '=' AddExp {
+    auto ast = new AST::Exp();
+    ast->type = AST::exp_t::GEQ;
+    ast->lhs = cast_uptr<AST::Exp>($1);
+    ast->rhs = cast_uptr<AST::Exp>($4);
+    $$ = ast;
+  }
+
+
+AddExp
+  : MulExp {
+    // auto ast = new AST::Exp();
+    // ast->type = AST::exp_t::NOP;
+    // ast->lhs = cast_uptr<AST::Exp>($1);
+    // $$ = ast;
+    $$ = $1;
+  }
+  | AddExp '+' MulExp {
+    auto ast = new AST::Exp();
+    ast->type = AST::exp_t::ADD;
+    ast->lhs = cast_uptr<AST::Exp>($1);
+    ast->rhs = cast_uptr<AST::Exp>($3);
+    $$ = ast;
+  }
+  | AddExp '-' MulExp {
+    auto ast = new AST::Exp();
+    ast->type = AST::exp_t::SUB;
+    ast->lhs = cast_uptr<AST::Exp>($1);
+    ast->rhs = cast_uptr<AST::Exp>($3);
+    $$ = ast;
+  }
+
+
+MulExp
+  : UnaryExp {
+    // auto ast = new AST::Exp();
+    // ast->type = AST::exp_t::NOP;
+    // ast->lhs = cast_uptr<AST::Exp>($1);
+    // $$ = ast;
+    $$ = $1;
+  }
+  | MulExp '*' UnaryExp {
+    auto ast = new AST::Exp();
+    ast->type = AST::exp_t::MUL;
+    ast->lhs = cast_uptr<AST::Exp>($1);
+    ast->rhs = cast_uptr<AST::Exp>($3);
+    $$ = ast;
+  }
+  | MulExp '/' UnaryExp {
+    auto ast = new AST::Exp();
+    ast->type = AST::exp_t::DIV;
+    ast->lhs = cast_uptr<AST::Exp>($1);
+    ast->rhs = cast_uptr<AST::Exp>($3);
+    $$ = ast;
+  }
+  | MulExp '%' UnaryExp {
+    auto ast = new AST::Exp();
+    ast->type = AST::exp_t::REM;
+    ast->lhs = cast_uptr<AST::Exp>($1);
+    ast->rhs = cast_uptr<AST::Exp>($3);
+    $$ = ast;
+  }
+
+
+UnaryExp
+  : UnaryOp UnaryExp {
+    if (((AST::Exp*)($1))->type == AST::exp_t::POSITIVE) {
+      // Pass through if it's a positive sign
+      $$ = $2;
+    } else {
+      auto ast = new AST::Exp();
+      ast->type = cast_uptr<AST::Exp>($1) -> type;
+      ast->rhs = cast_uptr<AST::Exp>($2);
+      $$ = ast;
+    }
+  }
+  | PrimaryExp {
+    // auto ast = new AST::Exp();
+    // ast->type = AST::exp_t::NOP;
+    // ast->lhs = cast_uptr<AST::Exp>($1);
+    // $$ = ast;
+    $$ = $1;
+  }
+
+
+UnaryOp
+  : '+' {
+    auto ast = new AST::Exp();
+    ast->type = AST::exp_t::POSITIVE;
+    $$ = ast;
+  }
+  | '-' {
+    auto ast = new AST::Exp();
+    ast->type = AST::exp_t::NEGATIVE;
+    $$ = ast;
+  }
+  | '!' {
+    auto ast = new AST::Exp();
+    ast->type = AST::exp_t::LOGICAL_NOT;
+    $$ = ast;
+  }
+
+
+PrimaryExp
+  : '(' Exp ')' {
+    $$ = $2;
+  }
+  | Number {
+    auto ast = new AST::Exp();
+    ast->type = AST::exp_t::NUMBER;
+    ast->number = $1;
+    $$ = ast;
+  }
+
 
 Number
   : INT_CONST {

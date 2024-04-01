@@ -17,6 +17,43 @@ enum class type_t {
 	INT
 };
 
+enum class exp_t {
+	NUMBER,
+
+	ADD,
+	SUB,
+	MUL,
+	DIV,
+	REM,
+
+	LT,
+	GT,
+	LEQ,
+	GEQ,
+	EQ,
+	NEQ,
+
+	BITWISE_AND,
+	BITWISE_OR,
+	BITWISE_XOR,
+
+	SHL,
+	SHR,
+	SAR
+};
+
+// Exp - An expression
+class Exp {
+public:
+	exp_t type;
+	int number;
+	shared_ptr<Exp> lhs;
+	shared_ptr<Exp> rhs;
+
+	Exp() = default;
+	Exp(int x) : type(exp_t::NUMBER), number(x) {}
+};
+
 // Inst - An instruction
 class Inst {
 public:
@@ -25,7 +62,7 @@ public:
 
 class ReturnInst : public Inst {
 public:
-	int ret_val;
+	Exp ret_exp;
 };
 
 // Block - A basic block

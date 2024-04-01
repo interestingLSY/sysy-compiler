@@ -42,7 +42,7 @@ list<string> kirt2asm(const shared_ptr<KIRT::Inst> &inst) {
 	list<string> res;
 
 	if (const KIRT::ReturnInst *ret_inst = dynamic_cast<const KIRT::ReturnInst *>(inst.get())) {
-		res.push_back("  li a0, " + std::to_string(ret_inst->ret_val));
+		res.push_back("  li a0, ");
 		res.push_back("  ret");
 	}
 
