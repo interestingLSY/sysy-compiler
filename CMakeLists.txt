@@ -3,7 +3,7 @@ cmake_minimum_required(VERSION 3.13)
 project(compiler)
 
 add_compile_options(-Wall -Wno-register)
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 20)
 
 # options about libraries and includes
 set(LIB_DIR "$ENV{CDE_LIBRARY_PATH}/native" CACHE STRING "directory of libraries")

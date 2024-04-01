@@ -20,6 +20,10 @@ enum class type_t {
 enum class exp_t {
 	NUMBER,
 
+	// POSITIVE won't appear in the final AST
+	// NEGATIVE will be converted to SUB
+	// LOGICAL_NOT will be converted to EQ 0
+
 	ADD,
 	SUB,
 	MUL,
@@ -39,7 +43,10 @@ enum class exp_t {
 
 	SHL,
 	SHR,
-	SAR
+	SAR,
+
+	EQ0,
+	NEQ0
 };
 
 // Exp - An expression

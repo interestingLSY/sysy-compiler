@@ -8,6 +8,7 @@
 #include "frontend/ast.h"
 #include "middleend/ast2kirt.h"
 #include "middleend/kirt2strkir.h"
+#include "middleend/pass_repl_unasm.h"
 #include "backend/kirt2asm.h"
 
 extern FILE *yyin;
@@ -66,9 +67,11 @@ int main(int argc, const char *argv[]) {
   }
   
   KIRT::Program kirt = KIRT::ast2kirt(*static_cast<AST::CompUnit *>(ast.get()));
-  std::list<std::string> strkir = KIRT::kirt2str(kirt);
+
+  KIRT::pass_repl_unasm(kirt);
 
   // Print KIR
+  std::list<std::string> strkir = KIRT::kirt2str(kirt);
   if (print_ir) {
     for (const std::string &line : strkir) {
       *output_stream << line << std::endl;

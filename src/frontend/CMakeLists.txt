@@ -10,8 +10,6 @@ string(REGEX REPLACE "(.*)\\.y" "${CMAKE_CURRENT_BINARY_DIR}/\\1.tab.cpp" Y_OUTP
 flex_target(Lexer ${L_SOURCES} ${L_OUTPUTS})
 bison_target(Parser ${Y_SOURCES} ${Y_OUTPUTS})
 add_flex_bison_dependency(Lexer Parser)
-message(${L_OUTPUTS} ${Y_OUTPUTS})
-message(${FLEX_Lexer_OUTPUTS} ${BISON_Parser_OUTPUT_SOURCE})
 
 add_library(frontend frontend.cpp ast.cpp
 	${FLEX_Lexer_OUTPUTS} ${BISON_Parser_OUTPUT_SOURCE})

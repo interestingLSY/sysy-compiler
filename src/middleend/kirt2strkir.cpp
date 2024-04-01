@@ -39,8 +39,10 @@ static string kirt_exp_t2str(exp_t type) {
 		case exp_t::GEQ:
 			return "ge";
 		case exp_t::EQ:
+		case exp_t::EQ0:
 			return "eq";
 		case exp_t::NEQ:
+		case exp_t::NEQ0:
 			return "ne";
 		case exp_t::BITWISE_AND:
 			return "and";
@@ -121,6 +123,22 @@ list<string> kirt2str(const ReturnInst &return_inst) {
 pair<list<string>, string> kirt2str(const Exp &exp) {
 	if (exp.type == exp_t::NUMBER) {
 		return { {}, std::to_string(exp.number) };
+	} else if (exp.type == exp_t::EQ0 || exp.type == exp_t::NEQ0) {
+		assert (exp.lhs);
+		auto [lhs_inst_list, lhs_varid] = kirt2str(*exp.lhs);
+		string res_varid = "%" + std::to_string(temp_reg_cnter.next());
+		list<string> res;
+		res.splice(res.end(), lhs_inst_list);
+		res.push_back(
+			"  " + 
+			res_varid +
+			" = " + 
+			kirt_exp_t2str(exp.type) +
+			" " +
+			lhs_varid +
+			", 0"
+		);
+		return {res, res_varid};
 	} else {
 		assert (exp.lhs);
 		assert (exp.rhs);
