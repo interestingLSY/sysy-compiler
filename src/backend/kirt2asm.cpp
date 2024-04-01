@@ -1,14 +1,32 @@
 #include "backend/kirt2asm.h"
 
 #include <cassert>
+#include <vector>
 
 #include "utils/utils.h"
 
 namespace ASM {
 
-// Currently we use a simple register allocation strategy: use registers one by one
-// This may lead to overflow of registers
-Counter reg_alloc_counter;
+class RegAllocator {
+public:
+	std::vector<int> free_regids;
+	RegAllocator() {
+		for (int i = 5; i < 32; i++) {
+			free_regids.push_back(i);
+		}
+	}
+	int get() {
+		assert (!free_regids.empty());
+		int regid = free_regids.back();
+		free_regids.pop_back();
+		return regid;
+	}
+	void mark_free(int regid) {
+		if (regid != 0) {
+			free_regids.push_back(regid);
+		}
+	}
+} reg_allocator;
 
 static string kirt_exp_t2asm(KIRT::exp_t type) {
 	switch (type) {
@@ -49,7 +67,6 @@ list<string> kirt2asm(const KIRT::Program &prog) {
 	list<string> res;
 	res.push_back(".text");
 	res.push_back(".globl main");
-	reg_alloc_counter.reset(5);	// x0-x4 are reserved
 
 	for (const KIRT::Function &func : prog.funcs) {
 		list<string> func_asm = kirt2asm(func);
@@ -102,15 +119,21 @@ list<string> kirt2asm(const shared_ptr<KIRT::Inst> &inst) {
 
 pair<list<string>, int> kirt2asm(const KIRT::Exp &inst) {
 	list<string> res;
-	int res_regid = reg_alloc_counter.next();
+	int res_regid = reg_allocator.get();
+	assert (res_regid < 32);
 	if (inst.type == KIRT::exp_t::NUMBER) {
 		// TODO Optimize if number == 0
-		res.push_back(format(
-			"  li x%d, %d",
-			res_regid,
-			inst.number
-		));
-		return {res, res_regid};
+		if (inst.number != 0) {
+			res.push_back(format(
+				"  li x%d, %d",
+				res_regid,
+				inst.number
+			));
+			return {res, res_regid};
+		} else {
+			reg_allocator.mark_free(res_regid);
+			return {res, 0};
+		}
 	} else if (inst.type == KIRT::exp_t::EQ0 || inst.type == KIRT::exp_t::NEQ0) {
 		auto [lhs_inst_list, lhs_regid] = kirt2asm(*inst.lhs);
 		res.splice(res.end(), lhs_inst_list);
@@ -120,6 +143,7 @@ pair<list<string>, int> kirt2asm(const KIRT::Exp &inst) {
 			res_regid,
 			lhs_regid
 		));
+		reg_allocator.mark_free(lhs_regid);
 		return {res, res_regid};
 	} else {
 		auto [lhs_inst_list, lhs_regid] = kirt2asm(*inst.lhs);
@@ -133,6 +157,8 @@ pair<list<string>, int> kirt2asm(const KIRT::Exp &inst) {
 			lhs_regid,
 			rhs_regid
 		));
+		reg_allocator.mark_free(lhs_regid);
+		reg_allocator.mark_free(rhs_regid);
 		return {res, res_regid};
 	}
 }
