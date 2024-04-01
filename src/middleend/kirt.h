@@ -20,6 +20,8 @@ enum class type_t {
 enum class exp_t {
 	NUMBER,
 
+	LVAL,
+
 	// POSITIVE won't appear in the final AST
 	// NEGATIVE will be converted to SUB
 	// LOGICAL_NOT will be converted to EQ 0
@@ -53,7 +55,8 @@ enum class exp_t {
 class Exp {
 public:
 	exp_t type;
-	int number;
+	int number;		// For NUMBER
+	string ident;	// For LVAL
 	shared_ptr<Exp> lhs;
 	shared_ptr<Exp> rhs;
 
@@ -72,16 +75,30 @@ public:
 	Exp ret_exp;
 };
 
+class AssignInst : public Inst {
+public:
+	string ident;
+	Exp exp;
+};
+
 // Block - A basic block
 class Block {
 public:
 	list<std::shared_ptr<Inst>> insts;
 };
 
+// BlockList - A list of basic blocks, corresponds to "Block" in AST
+// The first block will be considered as the entry block, and
+// the last block will be considered as the exit block (except return)
 class BlockList {
 public:
 	// The first block will be considered as the entry block
 	list<Block> blocks;
+
+	BlockList() {
+		// Make sure there is at least one block
+		blocks.push_back(Block());
+	}
 };
 
 // Function - A function definition

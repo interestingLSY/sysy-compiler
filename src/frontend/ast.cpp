@@ -25,6 +25,8 @@ static std::string exp_t2str(exp_t type) {
     switch (type) {
         case exp_t::NUMBER:
             return "number";
+        case exp_t::LVAL:
+            return "lval";
         case exp_t::POSITIVE:
             return "positive";
         case exp_t::NEGATIVE:
@@ -100,12 +102,12 @@ void FuncDef::print(int depth) const {
 
 void Block::print(int depth) const {
     cout << indent(depth) << "Block {" << endl;
-    body->print(depth + 1);
+    item->print(depth + 1);
     cout << indent(depth) << "}" << endl;
 }
 
-void BlockBody::print(int depth) const {
-    cout << indent(depth) << "BlockBody {" << endl;
+void BlockItem::print(int depth) const {
+    cout << indent(depth) << "BlockItem {" << endl;
     item->print(depth + 1);
     if (recur) {
         recur->print(depth);
@@ -141,6 +143,8 @@ void Exp::print(int depth) const {
     cout << indent(depth+1) << "type: " << exp_t2str(type) << endl;
     if (type == exp_t::NUMBER) {
         cout << indent(depth+1) << "number: " << number << endl;
+    } else if (type == exp_t::LVAL) {
+        lval->print(depth + 1);
     } else if (is_exp_t_unary(type)) {
         rhs->print(depth + 1);
     } else if (is_exp_t_binary(type)) {

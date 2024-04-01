@@ -1,7 +1,9 @@
 #include "kirt2strkir.h"
 
+#include <algorithm>
 #include <cassert>
 #include <memory>
+#include <vector>
 
 #include "utils/utils.h"
 
@@ -59,8 +61,32 @@ static string kirt_exp_t2str(exp_t type) {
 		default:
 			assert(0);
 	}
-
 }
+
+
+std::vector<string> get_all_varid(const Function &func) {
+	std::vector<string> res;
+	for (const Block &block : func.blocks.blocks) {
+		for (const shared_ptr<Inst> &inst : block.insts) {
+			if (const AssignInst *assign_inst = dynamic_cast<AssignInst*>(inst.get())) {
+				res.push_back(assign_inst->ident);
+			}
+		}
+	}
+	std::sort(res.begin(), res.end());
+	res.resize(std::unique(res.begin(), res.end()) - res.begin());
+	return res;
+}
+
+
+list<string> kirt2str(const Function &func);
+list<string> kirt2str(const BlockList &assembling_blocks);
+list<string> kirt2str(const Block &block);
+list<string> kirt2str(const std::shared_ptr<Inst> &inst);
+list<string> kirt2str(const ReturnInst &return_inst);
+list<string> kirt2str(const AssignInst &assign_inst);
+pair<list<string>, string> kirt2str(const Exp &exp);
+
 list<string> kirt2str(const Program &program) {
 	list<string> res;
 	for (const shared_ptr<Inst> &inst : program.global_defs) {
@@ -75,12 +101,19 @@ list<string> kirt2str(const Program &program) {
 }
 
 list<string> kirt2str(const Function &func) {
+	vector<string> varids = get_all_varid(func);
 	temp_reg_cnter.reset();	// Clear the register counter
+
 	list<string> res;
 	res.push_back("fun @" + func.name + "(): " + kirt_type_t2str(func.ret_type) + " {");
 	res.push_back("\%entry:");
+	for (string &varid : varids) {
+		res.push_back("  " + varid + " = alloc i32");
+	}
+
 	list<string> blocks_str = kirt2str(func.blocks);
 	res.splice(res.end(), blocks_str);
+
 	res.push_back("}");
 	return res;
 }
@@ -106,60 +139,74 @@ list<string> kirt2str(const Block &block) {
 list<string> kirt2str(const std::shared_ptr<Inst> &inst) {
 	if (const ReturnInst *return_inst = dynamic_cast<ReturnInst*>(inst.get())) {
 		return kirt2str(*return_inst);
+	} else if (const AssignInst *assign_inst = dynamic_cast<AssignInst*>(inst.get())) {
+		return kirt2str(*assign_inst);
 	} else {
 		assert(0);
 	}
-
 }
 
 list<string> kirt2str(const ReturnInst &return_inst) {
 	list<string> res;
-	auto [exp_inst_list, exp_varid] = kirt2str(return_inst.ret_exp);
+	auto [exp_inst_list, exp_coid] = kirt2str(return_inst.ret_exp);
 	res.splice(res.end(), exp_inst_list);
-	res.push_back("  ret " + exp_varid);
+	res.push_back("  ret " + exp_coid);
+	return res;
+}
+
+list<string> kirt2str(const AssignInst &AssignInst) {
+	list<string> res;
+	auto [exp_inst_list, exp_coid] = kirt2str(AssignInst.exp);
+	res.splice(res.end(), exp_inst_list);
+	// AssignInst.ident must be a variable name
+	res.push_back(format("  store %s, %s", exp_coid.c_str(), AssignInst.ident.c_str()));
 	return res;
 }
 
 pair<list<string>, string> kirt2str(const Exp &exp) {
 	if (exp.type == exp_t::NUMBER) {
 		return { {}, std::to_string(exp.number) };
+	} else if (exp.type == exp_t::LVAL) {
+		string res_coid = "%" + std::to_string(temp_reg_cnter.next());
+		string load_inst = format("  %s = load %s", res_coid.c_str(), exp.ident.c_str());
+		return { { load_inst }, res_coid };
 	} else if (exp.type == exp_t::EQ0 || exp.type == exp_t::NEQ0) {
 		assert (exp.lhs);
-		auto [lhs_inst_list, lhs_varid] = kirt2str(*exp.lhs);
-		string res_varid = "%" + std::to_string(temp_reg_cnter.next());
+		auto [lhs_inst_list, lhs_coid] = kirt2str(*exp.lhs);
+		string res_coid = "%" + std::to_string(temp_reg_cnter.next());
 		list<string> res;
 		res.splice(res.end(), lhs_inst_list);
 		res.push_back(
 			"  " + 
-			res_varid +
+			res_coid +
 			" = " + 
 			kirt_exp_t2str(exp.type) +
 			" " +
-			lhs_varid +
+			lhs_coid +
 			", 0"
 		);
-		return {res, res_varid};
+		return {res, res_coid};
 	} else {
 		assert (exp.lhs);
 		assert (exp.rhs);
-		auto [lhs_inst_list, lhs_varid] = kirt2str(*exp.lhs);
-		auto [rhs_inst_list, rhs_varid] = kirt2str(*exp.rhs);
-		string res_varid = "%" + std::to_string(temp_reg_cnter.next());
+		auto [lhs_inst_list, lhs_coid] = kirt2str(*exp.lhs);
+		auto [rhs_inst_list, rhs_coid] = kirt2str(*exp.rhs);
+		string res_coid = "%" + std::to_string(temp_reg_cnter.next());
 		list<string> res;
 		res.splice(res.end(), lhs_inst_list);
 		res.splice(res.end(), rhs_inst_list);
 		// res.push_back XXX
 		res.push_back(
 			"  " + 
-			res_varid +
+			res_coid +
 			" = " + 
 			kirt_exp_t2str(exp.type) +
 			" " +
-			lhs_varid +
+			lhs_coid +
 			", " +
-			rhs_varid
+			rhs_coid
 		);
-		return {res, res_varid};
+		return {res, res_coid};
 	}
 }
 

@@ -60,9 +60,9 @@ std::unique_ptr<TARGET> cast_uptr(AST::Base *base) {
 %type <int_val> Number
 %type <ast_val> TopLevel TopLevelDef_
 %type <ast_val> VarDecl_ VarDef
-%type <ast_val> FuncDef Block BlockBody BlockItem
+%type <ast_val> FuncDef Block BlockBody BlockItem_
 %type <ast_val> LVal Exp LOrExp LAndExp EqExp RelExp AddExp MulExp UnaryExp UnaryOp PrimaryExp
-%type <ast_val> Stmt ReturnStmt AssignStmt
+%type <ast_val> Stmt ReturnStmt AssignStmt NopStmt
 
 %%
 
@@ -146,38 +146,47 @@ FuncDef
 Block
   : '{' '}' {
     // An empty block
-    auto body = std::make_unique<AST::BlockBody>();
-    body->item = std::make_unique<AST::NopStmt>();
+    auto item = std::make_unique<AST::BlockItem>();
+    item->item = std::make_unique<AST::NopStmt>();
     auto ast = new AST::Block();
-    ast->body = std::move(body);
+    ast->item = std::move(item);
     $$ = ast;
   }
   | '{' BlockBody '}' {
     auto ast = new AST::Block();
-    ast->body = cast_uptr<AST::BlockBody>($2);
+    ast->item = cast_uptr<AST::BlockItem>($2);
     $$ = ast;
   }
   
 
 BlockBody
-  : BlockItem {
-    auto ast = new AST::BlockBody();
+  : BlockItem_ {
+    auto ast = new AST::BlockItem();
     ast->item = cast_uptr<AST::Base>($1);
     $$ = ast;
   }
-  | BlockItem BlockBody {
-    auto ast = new AST::BlockBody();
+  | BlockItem_ BlockBody {
+    auto ast = new AST::BlockItem();
     ast->item = cast_uptr<AST::Base>($1);
-    ast->recur = cast_uptr<AST::BlockBody>($2);
+    ast->recur = cast_uptr<AST::BlockItem>($2);
     $$ = ast;
   }
 
 
-BlockItem
+BlockItem_
   : Stmt {
     $$ = $1;
   }
   | VarDecl_ {
+    $$ = $1;
+  }
+  | Block {
+    // NOTE Here we modify the BNF to BlockItem ::= Decl | Stmt | Block
+    // and Stmt ::= ... | "while" "(" Exp ")" BlockItem | ...
+    // DO NOT FORGET TO MODIFY THE BNF WHEN INPLEMENTING IF/WHILE!!!
+
+    // NOTE Xuanlin Jiang warns me that modifying the BNF is a super-dangerous
+    // operation, but I do not believe him. Let's wait and see.
     $$ = $1;
   }
 
@@ -187,6 +196,9 @@ Stmt
     $$ = $1;
   }
   | AssignStmt {
+    $$ = $1;
+  }
+  | NopStmt {
     $$ = $1;
   }
 
@@ -205,6 +217,12 @@ AssignStmt
     ast->lval = cast_uptr<AST::LVal>($1);
     ast->exp = cast_uptr<AST::Exp>($3);
     $$ = ast;
+  }
+
+
+NopStmt
+  : ';' {
+    $$ = new AST::NopStmt();
   }
 
 
@@ -392,6 +410,12 @@ PrimaryExp
     auto ast = new AST::Exp();
     ast->type = AST::exp_t::NUMBER;
     ast->number = $1;
+    $$ = ast;
+  }
+  | LVal {
+    auto ast = new AST::Exp();
+    ast->type = AST::exp_t::LVAL;
+    ast->lval = cast_uptr<AST::LVal>($1);
     $$ = ast;
   }
 

@@ -13,6 +13,8 @@ enum class type_t {
 enum class exp_t {
 	NUMBER,
 
+	LVAL,
+
 	POSITIVE,	// This only appears in UnaryOp
 	NEGATIVE,
 	LOGICAL_NOT,
@@ -38,7 +40,9 @@ inline bool is_exp_t_unary(exp_t type) {
 	return type == exp_t::POSITIVE || type == exp_t::NEGATIVE || type == exp_t::LOGICAL_NOT;
 }
 inline bool is_exp_t_binary(exp_t type) {
-	return type != exp_t::NUMBER && !is_exp_t_unary(type);
+	return type == exp_t::ADD || type == exp_t::SUB || type == exp_t::MUL || type == exp_t::DIV || type == exp_t::REM ||
+		type == exp_t::LT || type == exp_t::GT || type == exp_t::LEQ || type == exp_t::GEQ || type == exp_t::EQ || type == exp_t::NEQ ||
+		type == exp_t::LOGICAL_AND || type == exp_t::LOGICAL_OR;
 }
 
 class Base {
@@ -109,16 +113,16 @@ public:
 // Block - A block of statements, looks like `{ XXX }`
 class Block : public Base {
 public:
-	std::unique_ptr<BlockBody> body;
+	std::unique_ptr<BlockItem> item;
 
 	void print(int depth) const;
 };
 
-// BlockBody - The body of a block, contains block items, can be recursive
-class BlockBody : public Base {
+// BlockItem - One item in the block, can be recursive
+class BlockItem : public Base {
 public:
-	std::unique_ptr<Base> item;	// Can be a Stmt or a VarDef
-	std::unique_ptr<BlockBody> recur;
+	std::unique_ptr<Base> item;	// Can be a Stmt, Vardef, or Block
+	std::unique_ptr<BlockItem> recur;
 	
 	void print(int depth) const;
 };
@@ -158,6 +162,7 @@ public:
 	exp_t type;
 
 	int number;	// Only valid when type == NUMBER
+	std::unique_ptr<LVal> lval;	// Only valid when type == LVAL
 	std::unique_ptr<Exp> lhs;	// Valid for binary ops
 	std::unique_ptr<Exp> rhs;	// Valid for binary ops and unary ops
 

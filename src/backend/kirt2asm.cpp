@@ -112,8 +112,9 @@ list<string> kirt2asm(const shared_ptr<KIRT::Inst> &inst) {
 			));
 		}
 		res.push_back("  ret");
+	} else {
+		assert(0);
 	}
-
 	return res;
 }
 

@@ -78,8 +78,8 @@ int main(int argc, const char *argv[]) {
     }
   }
 
-  std::list<std::string> strasm = ASM::kirt2asm(kirt);
   if (print_asm) {
+    std::list<std::string> strasm = ASM::kirt2asm(kirt);
     for (const std::string &line : strasm) {
       *output_stream << line << std::endl;
     }
