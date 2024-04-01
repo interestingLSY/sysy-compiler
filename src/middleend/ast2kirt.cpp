@@ -70,7 +70,7 @@ Program ast2kirt(const AST::TopLevel &top_level) {
 
 Function ast2kirt(const AST::FuncDef &func_def) {
 	Function func;
-	func.ret_type = ast_type_t2kirt_type_t(func_def.ret_type->type);
+	func.ret_type = ast_type_t2kirt_type_t(func_def.ret_type);
 	func.name = func_def.ident;
 	func.blocks = ast2kirt(*func_def.block);
 	return func;
@@ -82,16 +82,21 @@ BlockList ast2kirt(const AST::Block &block) {
 
 BlockList ast2kirt(const AST::BlockBody &block_body) {
 	assert(!block_body.recur);
-	assert(is_instance_of(block_body.item.get(), AST::ReturnStmt*));
-	AST::ReturnStmt *return_stmt = dynamic_cast<AST::ReturnStmt *>(block_body.item.get());
 	BlockList assembling_blocks;
-	Block block;
 
-	shared_ptr<ReturnInst> return_inst = std::make_unique<ReturnInst>();
-	return_inst->ret_exp = *ast2kirt(*return_stmt->ret_exp);
+	if (is_instance_of(block_body.item.get(), AST::ReturnStmt*)) {
+		Block block;
+		AST::ReturnStmt *return_stmt = dynamic_cast<AST::ReturnStmt *>(block_body.item.get());
+		shared_ptr<ReturnInst> return_inst = std::make_unique<ReturnInst>();
+		return_inst->ret_exp = *ast2kirt(*return_stmt->ret_exp);
 
-	block.insts.emplace_back(return_inst);
-	assembling_blocks.blocks.push_back(block);
+		block.insts.emplace_back(return_inst);
+		assembling_blocks.blocks.push_back(block);
+	} else if (is_instance_of(block_body.item.get(), AST::NopStmt*)) {
+		// Do nothing
+	} else {
+		assert(0);
+	}
 	return assembling_blocks;
 }
 

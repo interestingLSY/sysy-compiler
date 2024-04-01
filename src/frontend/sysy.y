@@ -52,15 +52,17 @@ std::unique_ptr<TARGET> cast_uptr(AST::Base *base) {
 }
 
 // lexer 返回的所有 token 种类的声明
-%token INT RETURN
+%token INT RETURN CONST
 %token <str_val> IDENT
 %token <int_val> INT_CONST
 
 // 非终结符的类型定义
 %type <int_val> Number
-%type <ast_val> TopLevel TopLevelDef FuncDef FuncType Block BlockBody BlockItem
-%type <ast_val> Exp LOrExp LAndExp EqExp RelExp AddExp MulExp UnaryExp UnaryOp PrimaryExp
-%type <ast_val> Stmt ReturnStmt
+%type <ast_val> TopLevel TopLevelDef_
+%type <ast_val> VarDecl_ VarDef
+%type <ast_val> FuncDef Block BlockBody BlockItem
+%type <ast_val> LVal Exp LOrExp LAndExp EqExp RelExp AddExp MulExp UnaryExp UnaryOp PrimaryExp
+%type <ast_val> Stmt ReturnStmt AssignStmt
 
 %%
 
@@ -73,45 +75,84 @@ CompUnit
 
 
 TopLevel
-  : TopLevelDef {
+  : TopLevelDef_ {
     auto ast = new AST::TopLevel();
-    ast->def = cast_uptr<AST::TopLevelDef>($1);
+    ast->def = cast_uptr<AST::Base>($1);
     $$ = ast;
   }
-  | TopLevelDef TopLevel {
+  | TopLevelDef_ TopLevel {
     auto ast = new AST::TopLevel();
-    ast->def = cast_uptr<AST::TopLevelDef>($1);
+    ast->def = cast_uptr<AST::Base>($1);
     ast->recur = cast_uptr<AST::TopLevel>($2);
     $$ = ast;
   }
 
 
-TopLevelDef
+TopLevelDef_
   : FuncDef {
+    $$ = $1;
+  }
+  | VarDecl_ {
     $$ = $1;
   }
 
 
-FuncDef
-  : FuncType IDENT '(' ')' Block {
-    auto ast = new AST::FuncDef();
-    ast->ret_type = cast_uptr<AST::FuncType>($1);
-    ast->ident = *unique_ptr<string>($2);
-    ast->block = cast_uptr<AST::Block>($5);
+VarDecl_
+  : CONST INT VarDef ';' {
+    $$ = $3;
+  }
+  | INT VarDef ';' {
+    $$ = $2;
+  }
+
+
+VarDef
+  : IDENT {
+    auto ast = new AST::VarDef();
+    ast->ident = *unique_ptr<string>($1);
+    $$ = ast;
+  }
+  | IDENT '=' Exp {
+    auto ast = new AST::VarDef();
+    ast->ident = *unique_ptr<string>($1);
+    ast->init_val = cast_uptr<AST::Exp>($3);
+    $$ = ast;
+  }
+  | IDENT ',' VarDef {
+    auto ast = new AST::VarDef();
+    ast->ident = *unique_ptr<string>($1);
+    ast->recur = cast_uptr<AST::VarDef>($3);
+    $$ = ast;
+  }
+  | IDENT '=' Exp ',' VarDef {
+    auto ast = new AST::VarDef();
+    ast->ident = *unique_ptr<string>($1);
+    ast->init_val = cast_uptr<AST::Exp>($3);
+    ast->recur = cast_uptr<AST::VarDef>($5);
     $$ = ast;
   }
 
 
-FuncType
-  : INT {
-    auto ast = new AST::FuncType();
-    ast->type = AST::type_t::INT;
+FuncDef
+  : INT IDENT '(' ')' Block {
+    auto ast = new AST::FuncDef();
+    ast->ret_type = AST::type_t::INT;
+    ast->ident = *unique_ptr<string>($2);
+    ast->block = cast_uptr<AST::Block>($5);
     $$ = ast;
   }
   
 
 Block
-  : '{' BlockBody '}' {
+  : '{' '}' {
+    // An empty block
+    auto body = std::make_unique<AST::BlockBody>();
+    body->item = std::make_unique<AST::NopStmt>();
+    auto ast = new AST::Block();
+    ast->body = std::move(body);
+    $$ = ast;
+  }
+  | '{' BlockBody '}' {
     auto ast = new AST::Block();
     ast->body = cast_uptr<AST::BlockBody>($2);
     $$ = ast;
@@ -121,12 +162,12 @@ Block
 BlockBody
   : BlockItem {
     auto ast = new AST::BlockBody();
-    ast->item = cast_uptr<AST::BlockItem>($1);
+    ast->item = cast_uptr<AST::Base>($1);
     $$ = ast;
   }
   | BlockItem BlockBody {
     auto ast = new AST::BlockBody();
-    ast->item = cast_uptr<AST::BlockItem>($1);
+    ast->item = cast_uptr<AST::Base>($1);
     ast->recur = cast_uptr<AST::BlockBody>($2);
     $$ = ast;
   }
@@ -136,10 +177,16 @@ BlockItem
   : Stmt {
     $$ = $1;
   }
+  | VarDecl_ {
+    $$ = $1;
+  }
 
 
 Stmt
   : ReturnStmt {
+    $$ = $1;
+  }
+  | AssignStmt {
     $$ = $1;
   }
 
@@ -152,24 +199,32 @@ ReturnStmt
   }
   
 
+AssignStmt
+  : LVal '=' Exp ';' {
+    auto ast = new AST::AssignStmt();
+    ast->lval = cast_uptr<AST::LVal>($1);
+    ast->exp = cast_uptr<AST::Exp>($3);
+    $$ = ast;
+  }
+
+
+LVal
+  : IDENT {
+    auto ast = new AST::LVal();
+    ast->ident = *unique_ptr<string>($1);
+    $$ = ast;
+  }
+
+
 Exp
   : LOrExp {
-    // auto ast = new AST::Exp();
-    // ast->type = AST::exp_t::NOP;
-    // ast->lhs = cast_uptr<AST::Exp>($1);
-    // $$ = ast;
     $$ = $1;
   }
 
 
 LOrExp
   : LAndExp {
-    // auto ast = new AST::Exp();
-    // ast->type = AST::exp_t::NOP;
-    // ast->lhs = cast_uptr<AST::Exp>($1);
-    // $$ = ast;
     $$ = $1;
-    // printf("%d\n", cast_uptr<AST::Exp>($1) -> type);
   }
   | LOrExp '|' '|' LAndExp {
     auto ast = new AST::Exp();
@@ -182,10 +237,6 @@ LOrExp
 
 LAndExp
   : EqExp {
-    // auto ast = new AST::Exp();
-    // ast->type = AST::exp_t::NOP;
-    // ast->lhs = cast_uptr<AST::Exp>($1);
-    // $$ = ast;
     $$ = $1;
   }
   | LAndExp '&' '&' EqExp {
@@ -199,10 +250,6 @@ LAndExp
 
 EqExp
   : RelExp {
-    // auto ast = new AST::Exp();
-    // ast->type = AST::exp_t::NOP;
-    // ast->lhs = cast_uptr<AST::Exp>($1);
-    // $$ = ast;
     $$ = $1;
   }
   | EqExp '=' '=' RelExp {
@@ -223,10 +270,6 @@ EqExp
 
 RelExp
   : AddExp {
-    // auto ast = new AST::Exp();
-    // ast->type = AST::exp_t::NOP;
-    // ast->lhs = cast_uptr<AST::Exp>($1);
-    // $$ = ast;
     $$ = $1;
   }
   | RelExp '<' AddExp {
@@ -261,10 +304,6 @@ RelExp
 
 AddExp
   : MulExp {
-    // auto ast = new AST::Exp();
-    // ast->type = AST::exp_t::NOP;
-    // ast->lhs = cast_uptr<AST::Exp>($1);
-    // $$ = ast;
     $$ = $1;
   }
   | AddExp '+' MulExp {
@@ -285,10 +324,6 @@ AddExp
 
 MulExp
   : UnaryExp {
-    // auto ast = new AST::Exp();
-    // ast->type = AST::exp_t::NOP;
-    // ast->lhs = cast_uptr<AST::Exp>($1);
-    // $$ = ast;
     $$ = $1;
   }
   | MulExp '*' UnaryExp {
@@ -327,10 +362,6 @@ UnaryExp
     }
   }
   | PrimaryExp {
-    // auto ast = new AST::Exp();
-    // ast->type = AST::exp_t::NOP;
-    // ast->lhs = cast_uptr<AST::Exp>($1);
-    // $$ = ast;
     $$ = $1;
   }
 

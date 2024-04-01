@@ -49,7 +49,8 @@ public:
 
 class CompUnit;
 class TopLevel;
-class TopLevelDef;
+
+class VarDef;
 
 class FuncDef;
 class FuncType;
@@ -57,10 +58,13 @@ class FuncType;
 class Block;
 class BlockBody;
 class BlockItem;
-class Exp;
 
 class Stmt;
 class ReturnStmt;
+class AssignStmt;
+
+class Exp;
+class LVal;
 
 // CompUnit - The entire program
 class CompUnit : public Base {
@@ -74,30 +78,30 @@ public:
 // We do not directive make CompUnit recursive since it is a "special" node in Bison
 class TopLevel : public Base {
 public:
-	std::unique_ptr<TopLevelDef> def;
+	std::unique_ptr<Base> def;	// Can be VarDef or FuncDef
 	std::unique_ptr<TopLevel> recur;
 
 	void print(int depth) const;
 };
 
-// An abstract class for top level definition, can be Decl / FuncDef
-class TopLevelDef : public Base {
-};
 
-// FuncDef - A function definition
-class FuncDef : public TopLevelDef {
+// VarDef - A variable/constant definition, can be recursive
+// My compiler does not distinguish between variable and constant
+class VarDef : public Base {
 public:
-	std::unique_ptr<FuncType> ret_type;
 	std::string ident;
-	std::unique_ptr<Block> block;
+	std::unique_ptr<Exp> init_val;
+	std::unique_ptr<VarDef> recur;
 
 	void print(int depth) const;
 };
 
-// FuncType - The return type of a function
-class FuncType : public Base {
+// FuncDef - A function definition
+class FuncDef : public Base {
 public:
-	type_t type;
+	type_t ret_type;
+	std::string ident;
+	std::unique_ptr<Block> block;
 
 	void print(int depth) const;
 };
@@ -113,22 +117,38 @@ public:
 // BlockBody - The body of a block, contains block items, can be recursive
 class BlockBody : public Base {
 public:
-	std::unique_ptr<BlockItem> item;
+	std::unique_ptr<Base> item;	// Can be a Stmt or a VarDef
 	std::unique_ptr<BlockBody> recur;
 	
 	void print(int depth) const;
 };
 
-// BlockItem - An item in a block (abstract), can be a variable declaration (Decl) of a statement (Stmt)
-class BlockItem : public Base {
+class Stmt : public Base {
 };
 
-class Stmt : public BlockItem {
+class NopStmt : public Stmt {
+public:
+	void print(int depth) const;
 };
 
 class ReturnStmt : public Stmt {
 public:
 	std::unique_ptr<Exp> ret_exp;
+
+	void print(int depth) const;
+};
+
+class AssignStmt : public Stmt {
+public:
+	std::unique_ptr<LVal> lval;
+	std::unique_ptr<Exp> exp;
+
+	void print(int depth) const;	
+};
+
+class LVal : public Base {
+public:
+	std::string ident;
 
 	void print(int depth) const;
 };
@@ -143,5 +163,6 @@ public:
 
 	void print(int depth) const;
 };
+
 
 }

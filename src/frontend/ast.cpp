@@ -78,17 +78,23 @@ void TopLevel::print(int depth) const {
     cout << indent(depth) << "}" << endl;
 }
 
-void FuncDef::print(int depth) const {
-    cout << indent(depth) << "FuncDef {" << endl;
-    ret_type->print(depth + 1);
+void VarDef::print(int depth) const {
+    cout << indent(depth) << "VarDef {" << endl;
     cout << indent(depth + 1) << "ident: " << ident << endl;
-    block->print(depth + 1);
+    if (init_val) {
+        init_val->print(depth + 1);
+    }
+    if (recur) {
+        recur->print(depth);
+    }
     cout << indent(depth) << "}" << endl;
 }
 
-void FuncType::print(int depth) const {
-    cout << indent(depth) << "FuncType {" << endl;
-    cout << indent(depth + 1) << "type: " << type2str(type) << endl;
+void FuncDef::print(int depth) const {
+    cout << indent(depth) << "FuncDef {" << endl;
+    cout << indent(depth + 1) << "type: " << type2str(ret_type) << endl;
+    cout << indent(depth + 1) << "ident: " << ident << endl;
+    block->print(depth + 1);
     cout << indent(depth) << "}" << endl;
 }
 
@@ -107,9 +113,26 @@ void BlockBody::print(int depth) const {
     cout << indent(depth) << "}" << endl;
 }
 
+void NopStmt::print(int depth) const {
+    cout << indent(depth) << "NopStmt" << endl;
+}
+
 void ReturnStmt::print(int depth) const {
     cout << indent(depth) << "ReturnStmt {" << endl;
     ret_exp->print(depth + 1);
+    cout << indent(depth) << "}" << endl;
+}
+
+void AssignStmt::print(int depth) const {
+    cout << indent(depth) << "AssignStmt {" << endl;
+    lval->print(depth + 1);
+    exp->print(depth + 1);
+    cout << indent(depth) << "}" << endl;
+}
+
+void LVal::print(int depth) const {
+    cout << indent(depth) << "LVal {" << endl;
+    cout << indent(depth + 1) << "ident: " << ident << endl;
     cout << indent(depth) << "}" << endl;
 }
 
