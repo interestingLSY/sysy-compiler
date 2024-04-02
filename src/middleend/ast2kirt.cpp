@@ -146,19 +146,18 @@ exp_t ast_binary_exp_t2kirt_exp_r(AST::exp_t ast_type_t) {
 Counter block_id_counter;
 
 // Function declarations
-Program ast2kirt(const AST::TopLevel &top_level);
-Function ast2kirt(const AST::FuncDef &func_def);
-BlockList ast2kirt(const AST::Block &block);
-BlockList ast2kirt(const AST::BlockItem &block_item);
-BlockList ast2kirt(const AST::Stmt &stmt);
-Block ast2kirt(const AST::VarDef &var_def);
-shared_ptr<Exp> ast2kirt(const AST::Exp &exp);
+Program ast2kirt(AST::TopLevel &top_level);
+Function ast2kirt(AST::FuncDef &func_def);
+BlockList ast2kirt(AST::Block &block);
+BlockList ast2kirt(AST::BlockItem &block_item);
+BlockList ast2kirt(AST::VarDef &var_def);
+shared_ptr<Exp> ast2kirt(AST::Exp &exp);
 
-Program ast2kirt(const AST::CompUnit &comp_unit) {
+Program ast2kirt(AST::CompUnit &comp_unit) {
 	return ast2kirt(*comp_unit.top_level);
 }
 
-Program ast2kirt(const AST::TopLevel &top_level) {
+Program ast2kirt(AST::TopLevel &top_level) {
 	block_id_counter.reset();
 	Program program;
 	if (is_instance_of(top_level.def.get(), AST::FuncDef*)) {
@@ -177,7 +176,7 @@ Program ast2kirt(const AST::TopLevel &top_level) {
 	return program;
 }
 
-Function ast2kirt(const AST::FuncDef &func_def) {
+Function ast2kirt(AST::FuncDef &func_def) {
 	Function func;
 	func.ret_type = ast_type_t2kirt_type_t(func_def.ret_type);
 	func.name = func_def.ident;
@@ -197,14 +196,14 @@ Function ast2kirt(const AST::FuncDef &func_def) {
 	return func;
 }
 
-BlockList ast2kirt(const AST::Block &block) {
+BlockList ast2kirt(AST::Block &block) {
 	reg_scope_renamer.on_enter_scope();
 	auto result = ast2kirt(*block.item);
 	reg_scope_renamer.on_exit_scope();
 	return result;
 }
 
-BlockList ast2kirt(const AST::BlockItem &block_item) {
+BlockList ast2kirt(AST::BlockItem &block_item) {
 	AST::Base* cur_item = block_item.item.get();	// Can be a statement / declaration / Block
 
 	if (is_instance_of(cur_item, AST::Block*)) {
@@ -224,10 +223,12 @@ BlockList ast2kirt(const AST::BlockItem &block_item) {
 	} else if (is_instance_of(cur_item, AST::VarDef*)) {
 		// Variable definition
 		AST::VarDef *var_def = dynamic_cast<AST::VarDef *>(cur_item);
-		Block var_def_block = ast2kirt(*var_def);
+		BlockList var_def_blocks = ast2kirt(*var_def);
 		BlockList following_blocks = block_item.recur ? ast2kirt(*block_item.recur) : get_unit_blocklist();
-		var_def_block.insts >> following_blocks.blocks.front()->insts;
-		return following_blocks;
+		following_blocks.blocks.front()->name = "avar_" + std::to_string(block_id_counter.next());
+		fill_in_empty_terminst_target(var_def_blocks, following_blocks.blocks.front());
+		var_def_blocks.blocks << following_blocks.blocks;
+		return var_def_blocks;
 
 	} else if (is_instance_of(cur_item, AST::Stmt*)) {
 		// A statement
@@ -272,7 +273,7 @@ BlockList ast2kirt(const AST::BlockItem &block_item) {
 			return following_blocks;
 		}
 
-		auto ast2kirt_stmt_or_block = [&](const std::unique_ptr<AST::Base> &stmt_or_block) -> BlockList {
+		auto ast2kirt_stmt_or_block = [&](std::unique_ptr<AST::Base> &stmt_or_block) -> BlockList {
 			// A helper function for converting a statement or block to a block list
 			// Useful in if() and while()
 			reg_scope_renamer.on_enter_scope();
@@ -346,22 +347,30 @@ BlockList ast2kirt(const AST::BlockItem &block_item) {
 	assert(0);
 }
 
-Block ast2kirt(const AST::VarDef &var_def) {
+BlockList ast2kirt(AST::VarDef &var_def) {
 	reg_scope_renamer.on_define_var(var_def.ident);
-	shared_ptr<AssignInst> assign_inst;
+	BlockList assign_insts = get_unit_blocklist();
 	if (var_def.init_val) {
-		assign_inst = std::make_unique<AssignInst>();
-		assign_inst->ident = reg_scope_renamer(var_def.ident);
-		assign_inst->exp = *ast2kirt(*var_def.init_val);
+		// Forge a virtual assignment statement
+		std::unique_ptr<AST::LVal> assign_stmt_lval = std::make_unique<AST::LVal>();
+		assign_stmt_lval->ident = var_def.ident;
+		std::unique_ptr<AST::AssignStmt> assign_stmt = std::make_unique<AST::AssignStmt>();
+		assign_stmt->lval = std::move(assign_stmt_lval);
+		assign_stmt->exp = std::move(var_def.init_val);
+		std::unique_ptr<AST::BlockItem> assign_stmt_block_item = std::make_unique<AST::BlockItem>();
+		assign_stmt_block_item->item = std::move(assign_stmt);
+		assign_insts = ast2kirt(*assign_stmt_block_item);
 	}
-	Block res = var_def.recur ? ast2kirt(*var_def.recur) : Block();
-	if (assign_inst) {
-		res.insts.emplace_front(std::move(assign_inst));
-	}
-	return res;
+
+	BlockList following_blocks = var_def.recur ? ast2kirt(*var_def.recur) : get_unit_blocklist();
+	following_blocks.blocks.front()->name = "avar_" + std::to_string(block_id_counter.next());
+
+	fill_in_empty_terminst_target(assign_insts, following_blocks.blocks.front());
+	assign_insts.blocks << following_blocks.blocks;
+	return assign_insts;
 }
 
-shared_ptr<Exp> ast2kirt(const AST::Exp &exp) {
+shared_ptr<Exp> ast2kirt(AST::Exp &exp) {
 	shared_ptr<Exp> kirt_exp = std::make_shared<Exp>();
 	switch (exp.type) {
 		case AST::exp_t::NUMBER:

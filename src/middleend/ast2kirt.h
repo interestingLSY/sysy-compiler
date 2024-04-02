@@ -5,6 +5,6 @@
 
 namespace KIRT {
 
-Program ast2kirt(const AST::CompUnit &comp_unit);
+Program ast2kirt(AST::CompUnit &comp_unit);
 
 }
