@@ -3,6 +3,8 @@
 
 #include "pass_repl_unasm.h"
 
+#include <cassert>
+
 namespace KIRT {
 
 static void pass_repl_unasm(Exp &exp) {
@@ -77,6 +79,10 @@ static void pass_repl_unasm(Exp &exp) {
 static void pass_repl_unasm(shared_ptr<Inst> &inst) {
 	if (auto ret_inst = dynamic_cast<ReturnInst *>(inst.get())) {
 		pass_repl_unasm(ret_inst->ret_exp);
+	} else if (auto assign_inst = dynamic_cast<AssignInst *>(inst.get())) {
+		pass_repl_unasm(assign_inst->exp);
+	} else {
+		assert(0);
 	}
 }
 
