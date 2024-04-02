@@ -9,6 +9,7 @@
 #include "middleend/ast2kirt.h"
 #include "middleend/kirt2strkir.h"
 #include "middleend/pass_repl_unasm.h"
+#include "middleend/pass_remove_unreachable.h"
 #include "backend/kirt2asm.h"
 
 extern FILE *yyin;
@@ -68,6 +69,8 @@ int main(int argc, const char *argv[]) {
   
   KIRT::Program kirt = KIRT::ast2kirt(*static_cast<AST::CompUnit *>(ast.get()));
 
+  KIRT::pass_remove_unreachable(kirt);
+  
   KIRT::pass_repl_unasm(kirt);
 
   // Print KIR

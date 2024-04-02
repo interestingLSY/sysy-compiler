@@ -4,6 +4,6 @@
 
 namespace KIRT {
 
-void pass_repl_unasm(Program &prog);
+void pass_remove_unreachable(Program &prog);
 
 }
