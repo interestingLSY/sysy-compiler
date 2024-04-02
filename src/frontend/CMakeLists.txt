@@ -11,5 +11,5 @@ flex_target(Lexer ${L_SOURCES} ${L_OUTPUTS})
 bison_target(Parser ${Y_SOURCES} ${Y_OUTPUTS})
 add_flex_bison_dependency(Lexer Parser)
 
-add_library(frontend frontend.cpp ast.cpp
+add_library(frontend ast.cpp
 	${FLEX_Lexer_OUTPUTS} ${BISON_Parser_OUTPUT_SOURCE})
