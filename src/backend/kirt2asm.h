@@ -8,11 +8,6 @@
 
 namespace ASM {
 
-using std::list;
-using std::pair;
-using std::string;
-using std::shared_ptr;
-
-list<string> kirt2asm(const KIRT::Program &prog);
+std::list<std::string> kirt2asm(const KIRT::Program &prog);
 
 }

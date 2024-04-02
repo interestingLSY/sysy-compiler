@@ -150,6 +150,15 @@ public:
 	void print(int depth) const;	
 };
 
+class IfStmt : public Stmt {
+public:
+	std::unique_ptr<Exp> cond;
+	std::unique_ptr<Base> then;			// Can be a Stmt or Block
+	std::unique_ptr<Base> otherwise;	// Can be a Stmt, Block, or empty
+
+	void print(int depth) const;
+};
+
 class LVal : public Base {
 public:
 	std::string ident;

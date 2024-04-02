@@ -63,7 +63,7 @@ std::string get_next_useless_var_name() {
 }
 
 // lexer 返回的所有 token 种类的声明
-%token INT RETURN CONST
+%token INT RETURN CONST IF ELSE
 %token <str_val> IDENT
 %token <int_val> INT_CONST
 
@@ -74,6 +74,7 @@ std::string get_next_useless_var_name() {
 %type <ast_val> FuncDef Block BlockBody BlockItem_
 %type <ast_val> LVal Exp LOrExp LAndExp EqExp RelExp AddExp MulExp UnaryExp UnaryOp PrimaryExp
 %type <ast_val> Stmt ReturnStmt AssignStmt NopStmt ExpStmt
+%type <ast_val> Stmt_ForceIfWithElse_ IfStmtWithElse_ IfStmtWithoutElse_ StmtOrBlock_
 
 %%
 
@@ -203,6 +204,15 @@ BlockItem_
 
 
 Stmt
+  : Stmt_ForceIfWithElse_ {
+    $$ = $1;
+  }
+  | IfStmtWithoutElse_ {
+    $$ = $1;
+  }
+
+
+Stmt_ForceIfWithElse_
   : ReturnStmt {
     $$ = $1;
   }
@@ -213,6 +223,9 @@ Stmt
     $$ = $1;
   }
   | ExpStmt {
+    $$ = $1;
+  }
+  | IfStmtWithElse_ {
     $$ = $1;
   }
 
@@ -230,6 +243,38 @@ AssignStmt
     auto ast = new AST::AssignStmt();
     ast->lval = cast_uptr<AST::LVal>($1);
     ast->exp = cast_uptr<AST::Exp>($3);
+    $$ = ast;
+  }
+
+
+IfStmtWithElse_
+  : IF '(' Exp ')' StmtOrBlock_ ELSE StmtOrBlock_ {
+    auto ast = new AST::IfStmt();
+    ast->cond = cast_uptr<AST::Exp>($3);
+    ast->then = cast_uptr<AST::Base>($5);
+    ast->otherwise = cast_uptr<AST::Base>($7);
+    $$ = ast;
+  }
+
+
+IfStmtWithoutElse_
+  : IF '(' Exp ')' StmtOrBlock_ {
+    auto ast = new AST::IfStmt();
+    ast->cond = cast_uptr<AST::Exp>($3);
+    ast->then = cast_uptr<AST::Base>($5);
+    $$ = ast;
+  }
+  
+
+StmtOrBlock_
+  : Stmt {
+    auto ast = new AST::BlockItem();
+    ast->item = cast_uptr<AST::Base>($1);
+    $$ = ast;
+  }
+  | Block {
+    auto ast = new AST::BlockItem();
+    ast->item = cast_uptr<AST::Base>($1);
     $$ = ast;
   }
 

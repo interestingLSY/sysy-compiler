@@ -77,10 +77,19 @@ static void pass_repl_unasm(Exp &exp) {
 }
 
 static void pass_repl_unasm(shared_ptr<Inst> &inst) {
-	if (auto ret_inst = dynamic_cast<ReturnInst *>(inst.get())) {
-		pass_repl_unasm(ret_inst->ret_exp);
-	} else if (auto assign_inst = dynamic_cast<AssignInst *>(inst.get())) {
+	if (auto assign_inst = dynamic_cast<AssignInst *>(inst.get())) {
 		pass_repl_unasm(assign_inst->exp);
+	} else {
+		assert(0);
+	}
+}
+
+static void pass_repl_unasm(shared_ptr<TermInst> &term_inst) {
+	if (auto ret_inst = dynamic_cast<ReturnInst *>(term_inst.get())) {
+		pass_repl_unasm(ret_inst->ret_exp);
+	} else if (auto br_inst = dynamic_cast<BranchInst *>(term_inst.get())) {
+		pass_repl_unasm(br_inst->cond);
+	} else if (auto jump_inst = dynamic_cast<JumpInst *>(term_inst.get())) {
 	} else {
 		assert(0);
 	}
@@ -89,11 +98,12 @@ static void pass_repl_unasm(shared_ptr<Inst> &inst) {
 static void pass_repl_unasm(Block &block) {
 	for (auto &inst : block.insts)
 		pass_repl_unasm(inst);
+	pass_repl_unasm(block.term_inst);
 }
 
 static void pass_repl_unasm(Function &func) {
 	for (auto &block : func.blocks.blocks)
-		pass_repl_unasm(block);
+		pass_repl_unasm(*block);
 }
 
 void pass_repl_unasm(Program &prog) {

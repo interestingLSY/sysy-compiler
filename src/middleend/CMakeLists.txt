@@ -3,5 +3,4 @@ add_library(
 	ast2kirt.cpp
 	kirt2strkir.cpp
 	pass_repl_unasm.cpp
-	pass_remove_unreachable.cpp
 )

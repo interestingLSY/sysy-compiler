@@ -8,6 +8,11 @@
 
 namespace ASM {
 
+using std::list;
+using std::pair;
+using std::string;
+using std::shared_ptr;
+
 enum class reg_alloc_stat_t {
 	REG,
 	STACK
@@ -71,7 +76,7 @@ public:
 
 	// Called when entering a function
 	void on_enter_function() {
-		stack_var_cnt = 0;
+		stack_var_cnt = 1;	// Start from "1" since "0" is reserved for the stack frame size
 		ident2stat.clear();
 	}
 
@@ -108,8 +113,6 @@ public:
 	}
 } reg_allocator;
 
-Counter virt_ident_counter;
-
 static string kirt_exp_t2asm(KIRT::exp_t type) {
 	switch (type) {
 		case KIRT::exp_t::NUMBER:
@@ -145,9 +148,19 @@ static string kirt_exp_t2asm(KIRT::exp_t type) {
 	}
 }
 
+// Some global status
+Counter virt_ident_counter;	// A counter for generating virtual identifer
+string cur_func_name;	// Current function name
+list<string> cur_func_epilogue;	// Current function epilogue (e.g. restore stack pointer)
+
+inline string rename_block(const string &block_name) {
+	return cur_func_name + "_" + block_name;
+}
+
 list<string> kirt2asm(const KIRT::Function &func);
 list<string> kirt2asm(const KIRT::Block &block);
 list<string> kirt2asm(const shared_ptr<KIRT::Inst> &inst);
+list<string> kirt2asm(const shared_ptr<KIRT::TermInst> &inst);
 pair<list<string>, string> kirt2asm(const KIRT::Exp &inst);
 
 list<string> kirt2asm(const KIRT::Program &prog) {
@@ -157,7 +170,7 @@ list<string> kirt2asm(const KIRT::Program &prog) {
 
 	for (const KIRT::Function &func : prog.funcs) {
 		list<string> func_asm = kirt2asm(func);
-		res.splice(res.end(), func_asm);
+		res << func_asm;
 	}
 
 	return res;
@@ -165,60 +178,50 @@ list<string> kirt2asm(const KIRT::Program &prog) {
 
 list<string> kirt2asm(const KIRT::Function &func) {
 	reg_allocator.on_enter_function();
+	cur_func_name = func.name;
+
+	cur_func_epilogue.clear();
+	cur_func_epilogue.push_back("  lw t0, 0(sp)");
+	cur_func_epilogue.push_back("  add sp, sp, t0");
 
 	list<string> res;
-
-	for (const KIRT::Block &block : func.blocks.blocks) {
-		list<string> block_asm = kirt2asm(block);
-		res.splice(res.end(), block_asm);
+	for (const std::shared_ptr<KIRT::Block> &block : func.blocks.blocks) {
+		list<string> block_asm = kirt2asm(*block);
+		res << block_asm;
 	}
 
-	list<string> prolouge, epilouge;
+	list<string> prolouge;
 	prolouge.push_back(func.name + ":");
 
-	int space_to_alloc = reg_allocator.get_max_stack_size();
-	if (space_to_alloc > 0) {
-		if (space_to_alloc % 16 != 0) {
-			space_to_alloc += 16 - (space_to_alloc % 16);
-		}
-		if (space_to_alloc <= 2047) {
-			prolouge.push_back(format(
-				"  addi sp, sp, -%d",
-				space_to_alloc
-			));
-			epilouge.push_back(format(
-				"  addi sp, sp, %d",
-				space_to_alloc
-			));
-		} else {
-			prolouge.push_back(format(
-				"  li t0, %d",
-				space_to_alloc
-			));
-			prolouge.push_back("  sub sp, sp, t0");
-			epilouge.push_back(format(
-				"  li t0, %d",
-				space_to_alloc
-			));
-			epilouge.push_back(format(
-				"  add sp, sp, t0"
-			));
-		}
+	int space_to_alloc = reg_allocator.get_max_stack_size() + 4;	// +4 for the stack frame length
+	if (space_to_alloc % 16 != 0) {
+		space_to_alloc += 16 - (space_to_alloc % 16);
 	}
+	// TODO Optimize when space_to_alloc == 0
+	// TODO Optimize when space_to_alloc <= 2047
+	prolouge.push_back(format(
+		"  li t0, %d",
+		space_to_alloc
+	));
+	prolouge.push_back("  sub sp, sp, t0");
+	prolouge.push_back("  sw t0, 0(sp)");
 
-	res.splice(res.begin(), prolouge);
-	res.splice(res.end(), epilouge);
+	prolouge >> res;
 
 	return res;
 }
 
 list<string> kirt2asm(const KIRT::Block &block) {
 	list<string> res;
+	res.push_back(rename_block(block.name) + ":");
 
 	for (const shared_ptr<KIRT::Inst> &inst : block.insts) {
 		list<string> inst_asm = kirt2asm(inst);
-		res.splice(res.end(), inst_asm);
+		res << inst_asm;
 	}
+
+	list<string> term_inst_asm = kirt2asm(block.term_inst);
+	res << term_inst_asm;
 
 	return res;
 }
@@ -226,33 +229,49 @@ list<string> kirt2asm(const KIRT::Block &block) {
 list<string> kirt2asm(const shared_ptr<KIRT::Inst> &inst) {
 	list<string> res;
 
-	if (const KIRT::ReturnInst *ret_inst = dynamic_cast<const KIRT::ReturnInst *>(inst.get())) {
-		auto [exp_inst_list, exp_virt_ident] = kirt2asm(ret_inst->ret_exp);
-		res.splice(res.end(), exp_inst_list);
-		
-		RegAllocStat exp_alloc_stat = reg_allocator.on_load(exp_virt_ident);
-		res.splice(res.end(), exp_alloc_stat.get_load_inst());
-		res.push_back(format(
-			"  mv a0, %s",
-			exp_alloc_stat.get_target_regid().c_str()
-		));
-		res.push_back("  ret");
-	} else if (const KIRT::AssignInst *assign_inst = dynamic_cast<const KIRT::AssignInst *>(inst.get())) {
+	if (const KIRT::AssignInst *assign_inst = dynamic_cast<const KIRT::AssignInst *>(inst.get())) {
 		auto [exp_inst_list, exp_virt_ident] = kirt2asm(assign_inst->exp);
-		res.splice(res.end(), exp_inst_list);
+		res << exp_inst_list;
 
 		RegAllocStat exp_alloc_stat = reg_allocator.on_load(exp_virt_ident);
-		res.splice(res.end(), exp_alloc_stat.get_load_inst());
+		res <= exp_alloc_stat.get_load_inst();
 		RegAllocStat target_alloc_stat = reg_allocator.on_store(assign_inst->ident);
 		res.push_back(format(
 			"  mv %s, %s",
 			target_alloc_stat.get_target_regid().c_str(),
 			exp_alloc_stat.get_target_regid().c_str()
 		));
-		res.splice(res.end(), target_alloc_stat.get_store_inst());
+		res <= target_alloc_stat.get_store_inst();
 	} else {
 		assert(0);
 	}
+	return res;
+}
+
+list<string> kirt2asm(const shared_ptr<KIRT::TermInst> &inst) {
+	list<string> res;
+
+	if (const KIRT::ReturnInst *ret_inst = dynamic_cast<const KIRT::ReturnInst *>(inst.get())) {
+		auto [exp_inst_list, exp_virt_ident] = kirt2asm(ret_inst->ret_exp);
+		res << exp_inst_list;
+		
+		RegAllocStat exp_alloc_stat = reg_allocator.on_load(exp_virt_ident);
+		res <= exp_alloc_stat.get_load_inst();
+		res.push_back(format(
+			"  mv a0, %s",
+			exp_alloc_stat.get_target_regid().c_str()
+		));
+		res <= cur_func_epilogue;
+		res.push_back("  ret");
+	} else if (const KIRT::JumpInst *jump_inst = dynamic_cast<const KIRT::JumpInst *>(inst.get())) {
+		res.push_back(format(
+			"  j %s",
+			rename_block(jump_inst->target_block->name).c_str()
+		));
+	} else {
+		assert(0);
+	}
+
 	return res;
 }
 
@@ -271,35 +290,35 @@ pair<list<string>, string> kirt2asm(const KIRT::Exp &exp) {
 					res_reg_alloc_stat.get_target_regid().c_str(),
 					exp.number
 				));
-				res.splice(res.end(), res_reg_alloc_stat.get_store_inst());
+				res <= res_reg_alloc_stat.get_store_inst();
 				return {res, res_virt_ident};
 			} else {
 				return {res, "0"};
 			}
 		} else if (exp.type == KIRT::exp_t::EQ0 || exp.type == KIRT::exp_t::NEQ0) {
 			auto [lhs_inst_list, lhs_virt_ident] = kirt2asm(*exp.lhs);
-			res.splice(res.end(), lhs_inst_list);
+			res << lhs_inst_list;
 
 			RegAllocStat lhs_alloc_stat = reg_allocator.on_load(lhs_virt_ident);
-			res.splice(res.end(), lhs_alloc_stat.get_load_inst());
+			res <= lhs_alloc_stat.get_load_inst();
 			res.push_back(format(
 				"  %s %s, %s",
 				exp.type == KIRT::exp_t::EQ0 ? "seqz" : "snez",
 				res_reg_alloc_stat.get_target_regid().c_str(),
 				lhs_alloc_stat.get_target_regid().c_str()
 			));
-			res.splice(res.end(), res_reg_alloc_stat.get_store_inst());
+			res <= res_reg_alloc_stat.get_store_inst();
 			return {res, res_virt_ident};
 		} else {
 			auto [lhs_inst_list, lhs_virt_ident] = kirt2asm(*exp.lhs);
 			auto [rhs_inst_list, rhs_virt_ident] = kirt2asm(*exp.rhs);
-			res.splice(res.end(), lhs_inst_list);
-			res.splice(res.end(), rhs_inst_list);
+			res << lhs_inst_list;
+			res << rhs_inst_list;
 
 			RegAllocStat lhs_alloc_stat = reg_allocator.on_load(lhs_virt_ident);
 			RegAllocStat rhs_alloc_stat = reg_allocator.on_load(rhs_virt_ident);
-			res.splice(res.end(), lhs_alloc_stat.get_load_inst());
-			res.splice(res.end(), rhs_alloc_stat.get_load_inst(true));
+			res <= lhs_alloc_stat.get_load_inst();
+			res <= rhs_alloc_stat.get_load_inst(true);
 			res.push_back(format(
 				"  %s %s, %s, %s",
 				kirt_exp_t2asm(exp.type).c_str(),
@@ -307,7 +326,7 @@ pair<list<string>, string> kirt2asm(const KIRT::Exp &exp) {
 				lhs_alloc_stat.get_target_regid().c_str(),
 				rhs_alloc_stat.get_target_regid(true).c_str()
 			));
-			res.splice(res.end(), res_reg_alloc_stat.get_store_inst());
+			res <= res_reg_alloc_stat.get_store_inst();
 			return {res, res_virt_ident};
 		}
 	}

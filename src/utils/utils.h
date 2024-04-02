@@ -1,13 +1,14 @@
 #pragma once
 
 #include <cstring>
+#include <list>
 
 // Test whether a pointer can be dynamically casted to a target type
 template<
 	typename POINTER_T,
 	typename TARGET_T
 >
-bool is_instance_of_(const POINTER_T &ptr) {
+static inline bool is_instance_of_(const POINTER_T &ptr) {
 	return dynamic_cast<TARGET_T>(ptr) != nullptr;
 }
 #define is_instance_of(ptr, TARGET_T) (is_instance_of_<decltype(ptr), TARGET_T>(ptr))
@@ -24,11 +25,36 @@ public:
 
 // A function that wraps `sprintf` to return a `std::string`
 template<typename... Args>
-std::string format(const char *fmt, Args... args) {
+static inline std::string format(const char *fmt, Args... args) {
 	size_t nbytes = snprintf(NULL, 0, fmt, args...) + 1; /* +1 for the '\0' */
 	char *str = (char*)malloc(nbytes);
 	snprintf(str, nbytes, fmt, args...);
 	std::string res(str);
 	free(str);
 	return res;
+}
+
+// Some helper functions for list manupulation
+template<typename T>
+static inline std::list<T>& operator<<(std::list<T> &lhs, std::list<T> &rhs) {
+	lhs.splice(lhs.end(), rhs);
+	return lhs;
+}
+
+template<typename T>
+static inline std::list<T>& operator>>(std::list<T> &lhs, std::list<T> &rhs) {
+	rhs.splice(rhs.begin(), lhs);
+	return lhs;
+}
+
+template<typename T>
+static inline std::list<T>& operator<=(std::list<T> &lhs, const std::list<T> &rhs) {
+	lhs.insert(lhs.end(), rhs.begin(), rhs.end());
+	return lhs;
+}
+
+template<typename T>
+static inline std::list<T>& operator>=(std::list<T> &lhs, const std::list<T> &rhs) {
+	lhs.insert(lhs.begin(), rhs.begin(), rhs.end());
+	return lhs;
 }

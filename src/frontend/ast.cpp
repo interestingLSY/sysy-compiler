@@ -132,6 +132,16 @@ void AssignStmt::print(int depth) const {
     cout << indent(depth) << "}" << endl;
 }
 
+void IfStmt::print(int depth) const {
+    cout << indent(depth) << "IfStmt {" << endl;
+    cond->print(depth + 1);
+    then->print(depth + 1);
+    if (otherwise) {
+        otherwise->print(depth + 1);
+    }
+    cout << indent(depth) << "}" << endl;
+}
+
 void LVal::print(int depth) const {
     cout << indent(depth) << "LVal {" << endl;
     cout << indent(depth + 1) << "ident: " << ident << endl;
