@@ -253,14 +253,48 @@ BlockList ast2kirt(const AST::BlockItem &block_item) {
 			BlockList following_blocks = block_item.recur ? ast2kirt(*block_item.recur) : get_unit_blocklist();
 			following_blocks.blocks.front()->insts.emplace_front(std::move(assign_inst));
 			return following_blocks;
-
-		} else {
-			assert(0);
 		}
+
+		auto ast2kirt_stmt_or_block = [&](const std::unique_ptr<AST::Base> &stmt_or_block) -> BlockList {
+			// A helper function for converting a statement or block to a block list
+			// Useful in if() and while()
+			reg_scope_renamer.on_enter_scope();
+			BlockList block_list = ast2kirt(*dynamic_cast<AST::BlockItem *>(stmt_or_block.get()));
+			reg_scope_renamer.on_exit_scope();
+			return block_list;
+		};
+		if (is_instance_of(cur_item, AST::IfStmt*)) {
+			AST::IfStmt *if_stmt = dynamic_cast<AST::IfStmt *>(cur_item);
+			shared_ptr<BranchInst> branch_inst = std::make_unique<BranchInst>();
+
+			// KIRT generation
+			branch_inst->cond = *ast2kirt(*if_stmt->cond);
+			BlockList true_blocks = ast2kirt_stmt_or_block(if_stmt->then);
+			BlockList false_blocks = if_stmt->otherwise ? ast2kirt_stmt_or_block(if_stmt->otherwise) : get_unit_blocklist();
+			BlockList following_blocks = block_item.recur ? ast2kirt(*block_item.recur) : get_unit_blocklist();
+
+			// Naming
+			string block_id = std::to_string(block_id_counter.next());
+			true_blocks.blocks.front()->name = "true_" + block_id;
+			false_blocks.blocks.front()->name = "false_" + block_id;
+			following_blocks.blocks.front()->name = "aif_" + block_id;
+
+			fill_in_empty_terminst_target(true_blocks, following_blocks.blocks.front());
+			fill_in_empty_terminst_target(false_blocks, following_blocks.blocks.front());
+			branch_inst->true_block = true_blocks.blocks.front();
+			branch_inst->false_block = false_blocks.blocks.front();
+			
+			BlockList res = get_unit_blocklist();
+			res.blocks.front()->term_inst = std::move(branch_inst);
+			res.blocks << true_blocks.blocks;
+			res.blocks << false_blocks.blocks;
+			res.blocks << following_blocks.blocks;
+			return res;
+		}
+		assert(0);
 	} else {
 		assert(0);
 	}
-
 	assert(0);
 }
 

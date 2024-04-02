@@ -99,6 +99,7 @@ list<string> kirt2str(const Block &block);
 list<string> kirt2str(const std::shared_ptr<TermInst> &term_inst);
 list<string> kirt2str(const ReturnInst &return_inst);
 list<string> kirt2str(const JumpInst &jump_inst);
+list<string> kirt2str(const BranchInst &branch_inst);
 list<string> kirt2str(const std::shared_ptr<Inst> &inst);
 list<string> kirt2str(const AssignInst &assign_inst);
 pair<list<string>, string> kirt2str(const Exp &exp);
@@ -164,6 +165,8 @@ list<string> kirt2str(const std::shared_ptr<TermInst> &term_inst) {
 		return kirt2str(*return_inst);
 	} else if (const JumpInst *jump_inst = dynamic_cast<JumpInst*>(term_inst_ptr)) {
 		return kirt2str(*jump_inst);
+	} else if (const BranchInst *branch_inst = dynamic_cast<BranchInst*>(term_inst_ptr)) {
+		return kirt2str(*branch_inst);
 	} else {
 		assert(0);
 	}
@@ -180,7 +183,22 @@ list<string> kirt2str(const ReturnInst &return_inst) {
 list<string> kirt2str(const JumpInst &jump_inst) {
 	list<string> res;
 	assert(jump_inst.target_block);
-	res.push_back("  jump \%" + jump_inst.target_block->name);
+	res.push_back("  jump %" + jump_inst.target_block->name);
+	return res;
+}
+
+list<string> kirt2str(const BranchInst &branch_inst) {
+	list<string> res;
+	assert (branch_inst.true_block);
+	assert (branch_inst.false_block);
+	auto [cond_inst_list, cond_coid] = kirt2str(branch_inst.cond);
+	res << cond_inst_list;
+	res.push_back(format(
+		"  br %s, %%%s, %%%s",
+		cond_coid.c_str(),
+		branch_inst.true_block->name.c_str(),
+		branch_inst.false_block->name.c_str()
+	));
 	return res;
 }
 
