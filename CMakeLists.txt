@@ -2,7 +2,7 @@
 cmake_minimum_required(VERSION 3.13)
 project(compiler)
 
-add_compile_options(-Wall -Wno-register)
+add_compile_options(-Wall -Wno-register -Wno-format-security)
 set(CMAKE_CXX_STANDARD 20)
 
 # options about libraries and includes

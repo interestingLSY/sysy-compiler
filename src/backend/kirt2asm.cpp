@@ -1,32 +1,114 @@
 #include "backend/kirt2asm.h"
 
 #include <cassert>
+#include <map>
 #include <vector>
 
 #include "utils/utils.h"
 
 namespace ASM {
 
+enum class reg_alloc_stat_t {
+	REG,
+	STACK
+};
+
+// RegAllocStat - Register allocation result
+// If type == REG, then id is the register id
+// If type == STACK, then id is the stack offset (in bytes)
+struct RegAllocStat {
+	reg_alloc_stat_t type;
+	int id;
+
+	string get_target_regid(bool is_rhs = false) {
+		// If type == REG, return the register id (e.g. "x12")
+		// If type == STACK, return t0
+		if (type == reg_alloc_stat_t::REG) {
+			return format("x%d", id);
+		} else {
+			return is_rhs ? "t1" : "t0";
+		}
+	}
+
+	list<string> get_load_inst(bool is_rhs = false) {
+		// If type == REG, return an empty list
+		// If type == STACK, return a list of instructions to load the value from the stack
+		if (type == reg_alloc_stat_t::REG) {
+			return {};
+		} else {
+			return {
+				format(
+					"  lw %s, %d(sp)",
+					is_rhs ? "t1" : "t0",
+					id
+				)
+			};
+		}
+	}
+
+	list<string> get_store_inst() {
+		// If type == REG, return an empty list
+		// If type == STACK, return a list of instructions to store the value to the stack
+		if (type == reg_alloc_stat_t::REG) {
+			return {};
+		} else {
+			return {
+				format(
+					"  sw t0, %d(sp)",
+					id
+				)
+			};
+		}
+	}
+};
+
+// RegAllocator - An on-the-fly register allocator
 class RegAllocator {
 public:
-	std::vector<int> free_regids;
-	RegAllocator() {
-		for (int i = 5; i < 32; i++) {
-			free_regids.push_back(i);
-		}
+	// std::vector<int> free_regids;
+	int stack_var_cnt;
+	std::map<string, RegAllocStat> ident2stat;
+
+	// Called when entering a function
+	void on_enter_function() {
+		stack_var_cnt = 0;
+		ident2stat.clear();
 	}
-	int get() {
-		assert (!free_regids.empty());
-		int regid = free_regids.back();
-		free_regids.pop_back();
-		return regid;
+
+	int get_max_stack_size() {
+		return stack_var_cnt*4;
 	}
-	void mark_free(int regid) {
-		if (regid != 0) {
-			free_regids.push_back(regid);
+
+	// Called when loading an identifer
+	RegAllocStat on_load(string ident) {
+		if (ident == "0") {
+			return {reg_alloc_stat_t::REG, 0};
 		}
+		if (!ident2stat.count(ident)) {
+			ident2stat[ident] = {reg_alloc_stat_t::STACK, stack_var_cnt*4};
+			stack_var_cnt += 1;
+		}
+		RegAllocStat stat = ident2stat[ident];
+		assert (stat.type == reg_alloc_stat_t::STACK);
+		return stat;
+	}
+
+	// Called when storing an identifier
+	RegAllocStat on_store(string ident) {
+		if (ident == "0") {
+			return {reg_alloc_stat_t::REG, 0};
+		}
+		if (!ident2stat.count(ident)) {
+			ident2stat[ident] = {reg_alloc_stat_t::STACK, stack_var_cnt*4};
+			stack_var_cnt += 1;
+		}
+		RegAllocStat stat = ident2stat[ident];
+		assert (stat.type == reg_alloc_stat_t::STACK);
+		return stat;
 	}
 } reg_allocator;
+
+Counter virt_ident_counter;
 
 static string kirt_exp_t2asm(KIRT::exp_t type) {
 	switch (type) {
@@ -63,6 +145,11 @@ static string kirt_exp_t2asm(KIRT::exp_t type) {
 	}
 }
 
+list<string> kirt2asm(const KIRT::Function &func);
+list<string> kirt2asm(const KIRT::Block &block);
+list<string> kirt2asm(const shared_ptr<KIRT::Inst> &inst);
+pair<list<string>, string> kirt2asm(const KIRT::Exp &inst);
+
 list<string> kirt2asm(const KIRT::Program &prog) {
 	list<string> res;
 	res.push_back(".text");
@@ -77,13 +164,50 @@ list<string> kirt2asm(const KIRT::Program &prog) {
 }
 
 list<string> kirt2asm(const KIRT::Function &func) {
+	reg_allocator.on_enter_function();
+
 	list<string> res;
-	res.push_back(func.name + ":");
 
 	for (const KIRT::Block &block : func.blocks.blocks) {
 		list<string> block_asm = kirt2asm(block);
 		res.splice(res.end(), block_asm);
 	}
+
+	list<string> prolouge, epilouge;
+	prolouge.push_back(func.name + ":");
+
+	int space_to_alloc = reg_allocator.get_max_stack_size();
+	if (space_to_alloc > 0) {
+		if (space_to_alloc % 16 != 0) {
+			space_to_alloc += 16 - (space_to_alloc % 16);
+		}
+		if (space_to_alloc <= 2047) {
+			prolouge.push_back(format(
+				"  addi sp, sp, -%d",
+				space_to_alloc
+			));
+			epilouge.push_back(format(
+				"  addi sp, sp, %d",
+				space_to_alloc
+			));
+		} else {
+			prolouge.push_back(format(
+				"  li t0, %d",
+				space_to_alloc
+			));
+			prolouge.push_back("  sub sp, sp, t0");
+			epilouge.push_back(format(
+				"  li t0, %d",
+				space_to_alloc
+			));
+			epilouge.push_back(format(
+				"  add sp, sp, t0"
+			));
+		}
+	}
+
+	res.splice(res.begin(), prolouge);
+	res.splice(res.end(), epilouge);
 
 	return res;
 }
@@ -103,64 +227,89 @@ list<string> kirt2asm(const shared_ptr<KIRT::Inst> &inst) {
 	list<string> res;
 
 	if (const KIRT::ReturnInst *ret_inst = dynamic_cast<const KIRT::ReturnInst *>(inst.get())) {
-		auto [exp_inst_list, exp_regid] = kirt2asm(ret_inst->ret_exp);
+		auto [exp_inst_list, exp_virt_ident] = kirt2asm(ret_inst->ret_exp);
 		res.splice(res.end(), exp_inst_list);
-		if (exp_regid != 10) {
-			res.push_back(format(
-				"  mv a0, x%d",
-				exp_regid
-			));
-		}
+		
+		RegAllocStat exp_alloc_stat = reg_allocator.on_load(exp_virt_ident);
+		res.splice(res.end(), exp_alloc_stat.get_load_inst());
+		res.push_back(format(
+			"  mv a0, %s",
+			exp_alloc_stat.get_target_regid().c_str()
+		));
 		res.push_back("  ret");
+	} else if (const KIRT::AssignInst *assign_inst = dynamic_cast<const KIRT::AssignInst *>(inst.get())) {
+		auto [exp_inst_list, exp_virt_ident] = kirt2asm(assign_inst->exp);
+		res.splice(res.end(), exp_inst_list);
+
+		RegAllocStat exp_alloc_stat = reg_allocator.on_load(exp_virt_ident);
+		res.splice(res.end(), exp_alloc_stat.get_load_inst());
+		RegAllocStat target_alloc_stat = reg_allocator.on_store(assign_inst->ident);
+		res.push_back(format(
+			"  mv %s, %s",
+			target_alloc_stat.get_target_regid().c_str(),
+			exp_alloc_stat.get_target_regid().c_str()
+		));
+		res.splice(res.end(), target_alloc_stat.get_store_inst());
 	} else {
 		assert(0);
 	}
 	return res;
 }
 
-pair<list<string>, int> kirt2asm(const KIRT::Exp &inst) {
+pair<list<string>, string> kirt2asm(const KIRT::Exp &exp) {
 	list<string> res;
-	int res_regid = reg_allocator.get();
-	assert (res_regid < 32);
-	if (inst.type == KIRT::exp_t::NUMBER) {
-		// TODO Optimize if number == 0
-		if (inst.number != 0) {
-			res.push_back(format(
-				"  li x%d, %d",
-				res_regid,
-				inst.number
-			));
-			return {res, res_regid};
-		} else {
-			reg_allocator.mark_free(res_regid);
-			return {res, 0};
-		}
-	} else if (inst.type == KIRT::exp_t::EQ0 || inst.type == KIRT::exp_t::NEQ0) {
-		auto [lhs_inst_list, lhs_regid] = kirt2asm(*inst.lhs);
-		res.splice(res.end(), lhs_inst_list);
-		res.push_back(format(
-			"  %s x%d, x%d",
-			inst.type == KIRT::exp_t::EQ0 ? "seqz" : "snez",
-			res_regid,
-			lhs_regid
-		));
-		reg_allocator.mark_free(lhs_regid);
-		return {res, res_regid};
+	if (exp.type == KIRT::exp_t::LVAL) {
+		string ident = exp.ident;
+		return {res, ident};
 	} else {
-		auto [lhs_inst_list, lhs_regid] = kirt2asm(*inst.lhs);
-		auto [rhs_inst_list, rhs_regid] = kirt2asm(*inst.rhs);
-		res.splice(res.end(), lhs_inst_list);
-		res.splice(res.end(), rhs_inst_list);
-		res.push_back(format(
-			"  %s x%d, x%d, x%d",
-			kirt_exp_t2asm(inst.type).c_str(),
-			res_regid,
-			lhs_regid,
-			rhs_regid
-		));
-		reg_allocator.mark_free(lhs_regid);
-		reg_allocator.mark_free(rhs_regid);
-		return {res, res_regid};
+		string res_virt_ident = format("v%d", virt_ident_counter.next());
+		RegAllocStat res_reg_alloc_stat = reg_allocator.on_store(res_virt_ident);
+		if (exp.type == KIRT::exp_t::NUMBER) {
+			if (exp.number != 0) {
+				res.push_back(format(
+					"  li %s, %d",
+					res_reg_alloc_stat.get_target_regid().c_str(),
+					exp.number
+				));
+				res.splice(res.end(), res_reg_alloc_stat.get_store_inst());
+				return {res, res_virt_ident};
+			} else {
+				return {res, "0"};
+			}
+		} else if (exp.type == KIRT::exp_t::EQ0 || exp.type == KIRT::exp_t::NEQ0) {
+			auto [lhs_inst_list, lhs_virt_ident] = kirt2asm(*exp.lhs);
+			res.splice(res.end(), lhs_inst_list);
+
+			RegAllocStat lhs_alloc_stat = reg_allocator.on_load(lhs_virt_ident);
+			res.splice(res.end(), lhs_alloc_stat.get_load_inst());
+			res.push_back(format(
+				"  %s %s, %s",
+				exp.type == KIRT::exp_t::EQ0 ? "seqz" : "snez",
+				res_reg_alloc_stat.get_target_regid().c_str(),
+				lhs_alloc_stat.get_target_regid().c_str()
+			));
+			res.splice(res.end(), res_reg_alloc_stat.get_store_inst());
+			return {res, res_virt_ident};
+		} else {
+			auto [lhs_inst_list, lhs_virt_ident] = kirt2asm(*exp.lhs);
+			auto [rhs_inst_list, rhs_virt_ident] = kirt2asm(*exp.rhs);
+			res.splice(res.end(), lhs_inst_list);
+			res.splice(res.end(), rhs_inst_list);
+
+			RegAllocStat lhs_alloc_stat = reg_allocator.on_load(lhs_virt_ident);
+			RegAllocStat rhs_alloc_stat = reg_allocator.on_load(rhs_virt_ident);
+			res.splice(res.end(), lhs_alloc_stat.get_load_inst());
+			res.splice(res.end(), rhs_alloc_stat.get_load_inst(true));
+			res.push_back(format(
+				"  %s %s, %s, %s",
+				kirt_exp_t2asm(exp.type).c_str(),
+				res_reg_alloc_stat.get_target_regid().c_str(),
+				lhs_alloc_stat.get_target_regid().c_str(),
+				rhs_alloc_stat.get_target_regid(true).c_str()
+			));
+			res.splice(res.end(), res_reg_alloc_stat.get_store_inst());
+			return {res, res_virt_ident};
+		}
 	}
 }
 
