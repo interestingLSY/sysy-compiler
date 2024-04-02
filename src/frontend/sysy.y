@@ -3,6 +3,7 @@
   #include <string>
   #include "frontend/ast.h"
 }
+%define lr.type ielr
 
 %{
 
@@ -64,6 +65,7 @@ std::string get_next_useless_var_name() {
 
 // lexer 返回的所有 token 种类的声明
 %token INT RETURN CONST IF ELSE
+%token LOGICAL_OR LOGICAL_AND EQ NEQ LEQ GEQ
 %token <str_val> IDENT
 %token <int_val> INT_CONST
 
@@ -74,7 +76,7 @@ std::string get_next_useless_var_name() {
 %type <ast_val> FuncDef Block BlockBody BlockItem_
 %type <ast_val> LVal Exp LOrExp LAndExp EqExp RelExp AddExp MulExp UnaryExp UnaryOp PrimaryExp
 %type <ast_val> Stmt ReturnStmt AssignStmt NopStmt ExpStmt
-%type <ast_val> Stmt_ForceIfWithElse_ IfStmtWithElse_ IfStmtWithoutElse_ StmtOrBlock_
+%type <ast_val> Stmt_ForceIfWithElse_ IfStmtForceWithElse_ IfStmtMaybeWithoutElse_ StmtOrBlock_ StmtOrBlock_ForceIfWithElse_
 
 %%
 
@@ -204,10 +206,19 @@ BlockItem_
 
 
 Stmt
-  : Stmt_ForceIfWithElse_ {
+  : ReturnStmt {
     $$ = $1;
   }
-  | IfStmtWithoutElse_ {
+  | AssignStmt {
+    $$ = $1;
+  }
+  | NopStmt {
+    $$ = $1;
+  }
+  | ExpStmt {
+    $$ = $1;
+  }
+  | IfStmtMaybeWithoutElse_ {
     $$ = $1;
   }
 
@@ -225,7 +236,7 @@ Stmt_ForceIfWithElse_
   | ExpStmt {
     $$ = $1;
   }
-  | IfStmtWithElse_ {
+  | IfStmtForceWithElse_ {
     $$ = $1;
   }
 
@@ -247,27 +258,47 @@ AssignStmt
   }
 
 
-IfStmtWithElse_
-  : IF '(' Exp ')' StmtOrBlock_ ELSE StmtOrBlock_ {
+IfStmtMaybeWithoutElse_
+  : IF '(' Exp ')' StmtOrBlock_ForceIfWithElse_ ELSE StmtOrBlock_ {
     auto ast = new AST::IfStmt();
     ast->cond = cast_uptr<AST::Exp>($3);
     ast->then = cast_uptr<AST::Base>($5);
     ast->otherwise = cast_uptr<AST::Base>($7);
     $$ = ast;
   }
-
-
-IfStmtWithoutElse_
-  : IF '(' Exp ')' StmtOrBlock_ {
+  | IF '(' Exp ')' StmtOrBlock_ {
     auto ast = new AST::IfStmt();
     ast->cond = cast_uptr<AST::Exp>($3);
     ast->then = cast_uptr<AST::Base>($5);
+    $$ = ast;
+  }
+
+
+IfStmtForceWithElse_
+  : IF '(' Exp ')' StmtOrBlock_ForceIfWithElse_ ELSE StmtOrBlock_ForceIfWithElse_ {
+    auto ast = new AST::IfStmt();
+    ast->cond = cast_uptr<AST::Exp>($3);
+    ast->then = cast_uptr<AST::Base>($5);
+    ast->otherwise = cast_uptr<AST::Base>($7);
     $$ = ast;
   }
   
 
 StmtOrBlock_
   : Stmt {
+    auto ast = new AST::BlockItem();
+    ast->item = cast_uptr<AST::Base>($1);
+    $$ = ast;
+  }
+  | Block {
+    auto ast = new AST::BlockItem();
+    ast->item = cast_uptr<AST::Base>($1);
+    $$ = ast;
+  }
+
+
+StmtOrBlock_ForceIfWithElse_
+  : Stmt_ForceIfWithElse_ {
     auto ast = new AST::BlockItem();
     ast->item = cast_uptr<AST::Base>($1);
     $$ = ast;
@@ -313,11 +344,11 @@ LOrExp
   : LAndExp {
     $$ = $1;
   }
-  | LOrExp '|' '|' LAndExp {
+  | LOrExp LOGICAL_OR LAndExp {
     auto ast = new AST::Exp();
     ast->type = AST::exp_t::LOGICAL_OR;
     ast->lhs = cast_uptr<AST::Exp>($1);
-    ast->rhs = cast_uptr<AST::Exp>($4);
+    ast->rhs = cast_uptr<AST::Exp>($3);
     $$ = ast;
   }
 
@@ -326,11 +357,11 @@ LAndExp
   : EqExp {
     $$ = $1;
   }
-  | LAndExp '&' '&' EqExp {
+  | LAndExp LOGICAL_AND EqExp {
     auto ast = new AST::Exp();
     ast->type = AST::exp_t::LOGICAL_AND;
     ast->lhs = cast_uptr<AST::Exp>($1);
-    ast->rhs = cast_uptr<AST::Exp>($4);
+    ast->rhs = cast_uptr<AST::Exp>($3);
     $$ = ast;
   }
 
@@ -339,18 +370,18 @@ EqExp
   : RelExp {
     $$ = $1;
   }
-  | EqExp '=' '=' RelExp {
+  | EqExp EQ RelExp {
     auto ast = new AST::Exp();
     ast->type = AST::exp_t::EQ;
     ast->lhs = cast_uptr<AST::Exp>($1);
-    ast->rhs = cast_uptr<AST::Exp>($4);
+    ast->rhs = cast_uptr<AST::Exp>($3);
     $$ = ast;
   }
-  | EqExp '!' '=' RelExp {
+  | EqExp NEQ RelExp {
     auto ast = new AST::Exp();
     ast->type = AST::exp_t::NEQ;
     ast->lhs = cast_uptr<AST::Exp>($1);
-    ast->rhs = cast_uptr<AST::Exp>($4);
+    ast->rhs = cast_uptr<AST::Exp>($3);
     $$ = ast;
   }
 
@@ -373,18 +404,18 @@ RelExp
     ast->rhs = cast_uptr<AST::Exp>($3);
     $$ = ast;
   }
-  | RelExp '<' '=' AddExp {
+  | RelExp LEQ AddExp {
     auto ast = new AST::Exp();
     ast->type = AST::exp_t::LEQ;
     ast->lhs = cast_uptr<AST::Exp>($1);
-    ast->rhs = cast_uptr<AST::Exp>($4);
+    ast->rhs = cast_uptr<AST::Exp>($3);
     $$ = ast;
   }
-  | RelExp '>' '=' AddExp {
+  | RelExp GEQ AddExp {
     auto ast = new AST::Exp();
     ast->type = AST::exp_t::GEQ;
     ast->lhs = cast_uptr<AST::Exp>($1);
-    ast->rhs = cast_uptr<AST::Exp>($4);
+    ast->rhs = cast_uptr<AST::Exp>($3);
     $$ = ast;
   }
 

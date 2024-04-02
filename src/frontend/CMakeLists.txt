@@ -8,7 +8,9 @@ set(Y_SOURCES sysy.y)
 string(REGEX REPLACE "(.*)\\.l" "${CMAKE_CURRENT_BINARY_DIR}/\\1.lex.cpp" L_OUTPUTS "${L_SOURCES}")
 string(REGEX REPLACE "(.*)\\.y" "${CMAKE_CURRENT_BINARY_DIR}/\\1.tab.cpp" Y_OUTPUTS "${Y_SOURCES}")
 flex_target(Lexer ${L_SOURCES} ${L_OUTPUTS})
-bison_target(Parser ${Y_SOURCES} ${Y_OUTPUTS})
+bison_target(Parser ${Y_SOURCES} ${Y_OUTPUTS}
+	VERBOSE "${CMAKE_CURRENT_BINARY_DIR}/parser.output"
+	REPORT_FILE "${CMAKE_CURRENT_BINARY_DIR}/parser.report")
 add_flex_bison_dependency(Lexer Parser)
 
 add_library(frontend ast.cpp
