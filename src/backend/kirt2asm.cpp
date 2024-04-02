@@ -268,6 +268,26 @@ list<string> kirt2asm(const shared_ptr<KIRT::TermInst> &inst) {
 			"  j %s",
 			rename_block(jump_inst->target_block->name).c_str()
 		));
+	} else if (const KIRT::BranchInst *branch_inst = dynamic_cast<const KIRT::BranchInst *>(inst.get())) {
+		auto [cond_inst_list, cond_virt_ident] = kirt2asm(branch_inst->cond);
+		res << cond_inst_list;
+
+		// TODO Now we first store the value of the instruction into a reg, then use
+		// bnez to jump. This can be optimized
+		// TODO Now we always jump to the false block, via `j %s`. In the future we may
+		// get rid of this jump via BlockReorderPass
+		// TODO Currently short-circuit is not supported
+		RegAllocStat cond_alloc_stat = reg_allocator.on_load(cond_virt_ident);
+		res <= cond_alloc_stat.get_load_inst();
+		res.push_back(format(
+			"  bnez %s, %s",
+			cond_alloc_stat.get_target_regid().c_str(),
+			rename_block(branch_inst->true_block->name).c_str()
+		));
+		res.push_back(format(
+			"  j %s",
+			rename_block(branch_inst->false_block->name).c_str()
+		));
 	} else {
 		assert(0);
 	}
