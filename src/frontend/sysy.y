@@ -64,7 +64,7 @@ std::string get_next_useless_var_name() {
 }
 
 // lexer 返回的所有 token 种类的声明
-%token INT RETURN CONST IF ELSE
+%token INT RETURN CONST IF ELSE WHILE BREAK CONTINUE
 %token LOGICAL_OR LOGICAL_AND EQ NEQ LEQ GEQ
 %token <str_val> IDENT
 %token <int_val> INT_CONST
@@ -77,6 +77,7 @@ std::string get_next_useless_var_name() {
 %type <ast_val> LVal Exp LOrExp LAndExp EqExp RelExp AddExp MulExp UnaryExp UnaryOp PrimaryExp
 %type <ast_val> Stmt ReturnStmt AssignStmt NopStmt ExpStmt
 %type <ast_val> Stmt_ForceIfWithElse_ IfStmtForceWithElse_ IfStmtMaybeWithoutElse_ StmtOrBlock_ StmtOrBlock_ForceIfWithElse_
+%type <ast_val> WhileStmt WhileStmtForceWithElse_ BreakStmt ContinueStmt
 
 %%
 
@@ -218,6 +219,15 @@ Stmt
   | ExpStmt {
     $$ = $1;
   }
+  | WhileStmt {
+    $$ = $1;
+  }
+  | BreakStmt {
+    $$ = $1;
+  }
+  | ContinueStmt {
+    $$ = $1;
+  }
   | IfStmtMaybeWithoutElse_ {
     $$ = $1;
   }
@@ -234,6 +244,15 @@ Stmt_ForceIfWithElse_
     $$ = $1;
   }
   | ExpStmt {
+    $$ = $1;
+  }
+  | WhileStmtForceWithElse_ {
+    $$ = $1;
+  }
+  | BreakStmt {
+    $$ = $1;
+  }
+  | ContinueStmt {
     $$ = $1;
   }
   | IfStmtForceWithElse_ {
@@ -307,6 +326,36 @@ StmtOrBlock_ForceIfWithElse_
     auto ast = new AST::BlockItem();
     ast->item = cast_uptr<AST::Base>($1);
     $$ = ast;
+  }
+
+
+WhileStmt
+  : WHILE '(' Exp ')' StmtOrBlock_ {
+    auto ast = new AST::WhileStmt();
+    ast->cond = cast_uptr<AST::Exp>($3);
+    ast->body = cast_uptr<AST::Base>($5);
+    $$ = ast;
+  }
+
+
+WhileStmtForceWithElse_
+  : WHILE '(' Exp ')' StmtOrBlock_ForceIfWithElse_ {
+    auto ast = new AST::WhileStmt();
+    ast->cond = cast_uptr<AST::Exp>($3);
+    ast->body = cast_uptr<AST::Base>($5);
+    $$ = ast;
+  }
+
+
+BreakStmt
+  : BREAK ';' {
+    $$ = new AST::BreakStmt();
+  }
+
+
+ContinueStmt
+  : CONTINUE ';' {
+    $$ = new AST::ContinueStmt();
   }
 
 

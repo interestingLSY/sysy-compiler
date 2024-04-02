@@ -33,6 +33,9 @@ Hexadecimal   0[xX][0-9a-fA-F]+
 "return"        { return RETURN; }
 "if"			{ return IF; }
 "else"			{ return ELSE; }
+"while"			{ return WHILE; }
+"break"			{ return BREAK; }
+"continue"		{ return CONTINUE; }
 
 "||"			{ return LOGICAL_OR; }
 "&&"			{ return LOGICAL_AND; }

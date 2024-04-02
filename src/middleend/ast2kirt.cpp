@@ -76,12 +76,13 @@ BlockList get_unit_blocklist(std::shared_ptr<Block> target = nullptr) {
 }
 
 // Fill in the empty terminal instruction target in the victim block list
-void fill_in_empty_terminst_target(BlockList& victim, std::shared_ptr<Block> &target) {
+// If the terminal instruction is a JumpInst, its type must match the given type
+void fill_in_empty_terminst_target(BlockList& victim, std::shared_ptr<Block> &target, jump_inst_t jump_inst_type = jump_inst_t::NORMAL) {
 	for (const std::shared_ptr<Block> &block : victim.blocks) {
 		assert (block->term_inst);
 		TermInst* term_inst = block->term_inst.get();
 		if (JumpInst *jump_inst = dynamic_cast<JumpInst*>(term_inst)) {
-			if (!jump_inst->target_block) {
+			if (jump_inst->type == jump_inst_type && !jump_inst->target_block) {
 				jump_inst->target_block = target;
 			}
 		} else if (BranchInst *branch_inst = dynamic_cast<BranchInst*>(term_inst)) {
@@ -237,16 +238,32 @@ BlockList ast2kirt(const AST::BlockItem &block_item) {
 
 		if (is_instance_of(cur_item, AST::ReturnStmt*)) {
 			AST::ReturnStmt *return_stmt = dynamic_cast<AST::ReturnStmt *>(cur_item);
-			shared_ptr<ReturnInst> return_inst = std::make_unique<ReturnInst>();
+			shared_ptr<ReturnInst> return_inst = std::make_shared<ReturnInst>();
 			return_inst->ret_exp = *ast2kirt(*return_stmt->ret_exp);
 			BlockList res = get_unit_blocklist();
 			res.blocks.front()->term_inst = std::move(return_inst);
 			return res;
 		}
 
+		if (is_instance_of(cur_item, AST::BreakStmt*)) {
+			shared_ptr<JumpInst> jump_inst = std::make_shared<JumpInst>();
+			jump_inst->type = jump_inst_t::BREAK;
+			BlockList res = get_unit_blocklist();
+			res.blocks.front()->term_inst = std::move(jump_inst);
+			return res;
+		}
+
+		if (is_instance_of(cur_item, AST::ContinueStmt*)) {
+			shared_ptr<JumpInst> jump_inst = std::make_shared<JumpInst>();
+			jump_inst->type = jump_inst_t::CONTINUE;
+			BlockList res = get_unit_blocklist();
+			res.blocks.front()->term_inst = std::move(jump_inst);
+			return res;
+		}
+
 		if (is_instance_of(cur_item, AST::AssignStmt*)) {
 			AST::AssignStmt *assign_stmt = dynamic_cast<AST::AssignStmt *>(cur_item);
-			shared_ptr<AssignInst> assign_inst = std::make_unique<AssignInst>();
+			shared_ptr<AssignInst> assign_inst = std::make_shared<AssignInst>();
 			assign_inst->ident = reg_scope_renamer(assign_stmt->lval->ident);
 			assign_inst->exp = *ast2kirt(*assign_stmt->exp);
 
@@ -265,7 +282,7 @@ BlockList ast2kirt(const AST::BlockItem &block_item) {
 		};
 		if (is_instance_of(cur_item, AST::IfStmt*)) {
 			AST::IfStmt *if_stmt = dynamic_cast<AST::IfStmt *>(cur_item);
-			shared_ptr<BranchInst> branch_inst = std::make_unique<BranchInst>();
+			shared_ptr<BranchInst> branch_inst = std::make_shared<BranchInst>();
 
 			// KIRT generation
 			branch_inst->cond = *ast2kirt(*if_stmt->cond);
@@ -291,6 +308,37 @@ BlockList ast2kirt(const AST::BlockItem &block_item) {
 			res.blocks << following_blocks.blocks;
 			return res;
 		}
+
+		if (is_instance_of(cur_item, AST::WhileStmt*)) {
+			AST::WhileStmt *while_stmt = dynamic_cast<AST::WhileStmt *>(cur_item);
+
+			// KIRT generation
+			shared_ptr<BranchInst> branch_inst = std::make_shared<BranchInst>();
+			branch_inst->cond = *ast2kirt(*while_stmt->cond);
+			BlockList body_blocks = ast2kirt_stmt_or_block(while_stmt->body);
+			BlockList following_blocks = block_item.recur ? ast2kirt(*block_item.recur) : get_unit_blocklist();
+
+			// Naming
+			string block_id = std::to_string(block_id_counter.next());
+			body_blocks.blocks.front()->name = "body_" + block_id;
+			following_blocks.blocks.front()->name = "awhile_" + block_id;
+
+			// Merging
+			BlockList res = get_unit_blocklist();
+			res.blocks.push_front(get_unit_block(res.blocks.back()));
+			res.blocks.back()->name = "while_" + block_id;
+
+			fill_in_empty_terminst_target(body_blocks, res.blocks.back());
+			fill_in_empty_terminst_target(body_blocks, following_blocks.blocks.front(), jump_inst_t::BREAK);
+			fill_in_empty_terminst_target(body_blocks, res.blocks.back(), jump_inst_t::CONTINUE);
+			branch_inst->true_block = body_blocks.blocks.front();
+			branch_inst->false_block = following_blocks.blocks.front();
+			res.blocks.back()->term_inst = std::move(branch_inst);
+			res.blocks << body_blocks.blocks;
+			res.blocks << following_blocks.blocks;
+			return res;
+		}
+
 		assert(0);
 	} else {
 		assert(0);

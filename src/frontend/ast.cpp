@@ -142,6 +142,21 @@ void IfStmt::print(int depth) const {
     cout << indent(depth) << "}" << endl;
 }
 
+void WhileStmt::print(int depth) const {
+    cout << indent(depth) << "WhileStmt {" << endl;
+    cond->print(depth + 1);
+    body->print(depth + 1);
+    cout << indent(depth) << "}" << endl;
+}
+
+void BreakStmt::print(int depth) const {
+    cout << indent(depth) << "BreakStmt" << endl;
+}
+
+void ContinueStmt::print(int depth) const {
+    cout << indent(depth) << "ContinueStmt" << endl;
+}
+
 void LVal::print(int depth) const {
     cout << indent(depth) << "LVal {" << endl;
     cout << indent(depth + 1) << "ident: " << ident << endl;

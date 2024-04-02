@@ -159,6 +159,24 @@ public:
 	void print(int depth) const;
 };
 
+class WhileStmt : public Stmt {
+public:
+	std::unique_ptr<Exp> cond;
+	std::unique_ptr<Base> body;	// Can be a Stmt or Block
+
+	void print(int depth) const;
+};
+
+class BreakStmt : public Stmt {
+public:
+	void print(int depth) const;
+};
+
+class ContinueStmt : public Stmt {
+public:
+	void print(int depth) const;
+};
+
 class LVal : public Base {
 public:
 	std::string ident;

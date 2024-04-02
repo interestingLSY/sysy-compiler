@@ -104,8 +104,14 @@ public:
 	std::shared_ptr<Block> false_block;
 };
 
+enum class jump_inst_t {
+	NORMAL,
+	BREAK,
+	CONTINUE
+};
 class JumpInst : public TermInst {
 public:
+	jump_inst_t type = jump_inst_t::NORMAL;	// The type of the jump instruction. It affects jump relocation
 	std::shared_ptr<Block> target_block;
 };
 
