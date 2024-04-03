@@ -147,7 +147,10 @@ public:
 //  [1] All blocks satisfy [1]
 //  [2] The target block of a terminal instruction may be nullptr, meaning that
 //      the control flow will leave the current blocklist, heading to the entry
-//      block of the next blocklist
+//      block of the next blocklist.
+// 		Specifically, for a BlockList returned by `ast2kirt(AST::Exp &exp)`, 
+// 		all blocks except the last one contains a complete terminal instruction,
+// 		while the last block has a JumpInst with target = nullptr
 //  [3] The first block, and only the first block, may not satisfy [3]
 //  [4] The first block, and only the first block, may not satisfy [4]
 // Besides, the returned block list must contain at least one block.

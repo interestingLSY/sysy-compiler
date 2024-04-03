@@ -9,6 +9,8 @@
 
 namespace KIRT {
 
+using std::pair;
+
 // The register scope renamer
 // With the introduction of scoping, variable from different scopes may have the same name
 // To avoid confusion, we rename the variables to a unique name:
@@ -59,8 +61,8 @@ public:
 
 // Generate a block with an empty JumpInst terminal instruction
 // This block is called as "unit block" since it behaves like a unit in the blocklist
-std::shared_ptr<Block> get_unit_block(std::shared_ptr<Block> target = nullptr) {
-	std::shared_ptr<Block> res = std::make_shared<Block>();
+shared_ptr<Block> get_unit_block(std::shared_ptr<Block> target = nullptr) {
+	shared_ptr<Block> res = std::make_shared<Block>();
 	res->term_inst = std::make_shared<JumpInst>();
 	if (target) {
 		dynamic_cast<JumpInst*>(res->term_inst.get())->target_block = target;
@@ -72,6 +74,28 @@ std::shared_ptr<Block> get_unit_block(std::shared_ptr<Block> target = nullptr) {
 BlockList get_unit_blocklist(std::shared_ptr<Block> target = nullptr) {
 	BlockList res;
 	res.blocks.push_back(get_unit_block(target));
+	return res;
+}
+
+shared_ptr<AssignInst> get_assign_inst(const string &ident, const Exp &exp) {
+	shared_ptr<AssignInst> res = std::make_shared<AssignInst>();
+	res->ident = ident;
+	res->exp = exp;
+	return res;
+}
+
+shared_ptr<JumpInst> get_jump_inst(const std::shared_ptr<Block> target_block, jump_inst_t type = jump_inst_t::NORMAL) {
+	shared_ptr<JumpInst> res = std::make_shared<JumpInst>();
+	res->target_block = target_block;
+	res->type = type;
+	return res;
+}
+
+shared_ptr<BranchInst> get_branch_inst(const Exp &cond, const std::shared_ptr<Block> true_block, const std::shared_ptr<Block> false_block) {
+	shared_ptr<BranchInst> res = std::make_shared<BranchInst>();
+	res->cond = cond;
+	res->true_block = true_block;
+	res->false_block = false_block;
 	return res;
 }
 
@@ -151,7 +175,7 @@ Function ast2kirt(AST::FuncDef &func_def);
 BlockList ast2kirt(AST::Block &block);
 BlockList ast2kirt(AST::BlockItem &block_item);
 BlockList ast2kirt(AST::VarDef &var_def);
-shared_ptr<Exp> ast2kirt(AST::Exp &exp);
+pair<shared_ptr<Exp>, BlockList> ast2kirt(AST::Exp &exp);
 
 Program ast2kirt(AST::CompUnit &comp_unit) {
 	return ast2kirt(*comp_unit.top_level);
@@ -240,10 +264,10 @@ BlockList ast2kirt(AST::BlockItem &block_item) {
 		if (is_instance_of(cur_item, AST::ReturnStmt*)) {
 			AST::ReturnStmt *return_stmt = dynamic_cast<AST::ReturnStmt *>(cur_item);
 			shared_ptr<ReturnInst> return_inst = std::make_shared<ReturnInst>();
-			return_inst->ret_exp = *ast2kirt(*return_stmt->ret_exp);
-			BlockList res = get_unit_blocklist();
-			res.blocks.front()->term_inst = std::move(return_inst);
-			return res;
+			auto [ret_exp, ret_exp_blocks] = ast2kirt(*return_stmt->ret_exp);
+			return_inst->ret_exp = *ret_exp;
+			ret_exp_blocks.blocks.back()->term_inst = std::move(return_inst);
+			return ret_exp_blocks;
 		}
 
 		if (is_instance_of(cur_item, AST::BreakStmt*)) {
@@ -266,11 +290,16 @@ BlockList ast2kirt(AST::BlockItem &block_item) {
 			AST::AssignStmt *assign_stmt = dynamic_cast<AST::AssignStmt *>(cur_item);
 			shared_ptr<AssignInst> assign_inst = std::make_shared<AssignInst>();
 			assign_inst->ident = reg_scope_renamer(assign_stmt->lval->ident);
-			assign_inst->exp = *ast2kirt(*assign_stmt->exp);
+			auto [exp, exp_blocks] = ast2kirt(*assign_stmt->exp);
+			assign_inst->exp = *exp;
+
+			exp_blocks.blocks.back()->insts.push_back(assign_inst);	// the last block of exp_blocks is the exit block
 
 			BlockList following_blocks = block_item.recur ? ast2kirt(*block_item.recur) : get_unit_blocklist();
-			following_blocks.blocks.front()->insts.emplace_front(std::move(assign_inst));
-			return following_blocks;
+			following_blocks.blocks.front()->name = "aassign_" + std::to_string(block_id_counter.next());
+			exp_blocks.blocks.back()->term_inst = get_jump_inst(following_blocks.blocks.front());
+			exp_blocks.blocks << following_blocks.blocks;
+			return exp_blocks;
 		}
 
 		auto ast2kirt_stmt_or_block = [&](std::unique_ptr<AST::Base> &stmt_or_block) -> BlockList {
@@ -283,10 +312,9 @@ BlockList ast2kirt(AST::BlockItem &block_item) {
 		};
 		if (is_instance_of(cur_item, AST::IfStmt*)) {
 			AST::IfStmt *if_stmt = dynamic_cast<AST::IfStmt *>(cur_item);
-			shared_ptr<BranchInst> branch_inst = std::make_shared<BranchInst>();
 
 			// KIRT generation
-			branch_inst->cond = *ast2kirt(*if_stmt->cond);
+			auto [cond_expr, cond_expr_blocks] = ast2kirt(*if_stmt->cond);
 			BlockList true_blocks = ast2kirt_stmt_or_block(if_stmt->then);
 			BlockList false_blocks = if_stmt->otherwise ? ast2kirt_stmt_or_block(if_stmt->otherwise) : get_unit_blocklist();
 			BlockList following_blocks = block_item.recur ? ast2kirt(*block_item.recur) : get_unit_blocklist();
@@ -297,25 +325,29 @@ BlockList ast2kirt(AST::BlockItem &block_item) {
 			false_blocks.blocks.front()->name = "false_" + block_id;
 			following_blocks.blocks.front()->name = "aif_" + block_id;
 
+			// Redirection
 			fill_in_empty_terminst_target(true_blocks, following_blocks.blocks.front());
 			fill_in_empty_terminst_target(false_blocks, following_blocks.blocks.front());
+
+			// Branching
+			shared_ptr<BranchInst> branch_inst = std::make_shared<BranchInst>();
+			branch_inst->cond = *cond_expr;
 			branch_inst->true_block = true_blocks.blocks.front();
 			branch_inst->false_block = false_blocks.blocks.front();
+			cond_expr_blocks.blocks.back()->term_inst = std::move(branch_inst);
 			
-			BlockList res = get_unit_blocklist();
-			res.blocks.front()->term_inst = std::move(branch_inst);
-			res.blocks << true_blocks.blocks;
-			res.blocks << false_blocks.blocks;
-			res.blocks << following_blocks.blocks;
-			return res;
+			// List merging
+			cond_expr_blocks.blocks << true_blocks.blocks;
+			cond_expr_blocks.blocks << false_blocks.blocks;
+			cond_expr_blocks.blocks << following_blocks.blocks;
+			return cond_expr_blocks;
 		}
 
 		if (is_instance_of(cur_item, AST::WhileStmt*)) {
 			AST::WhileStmt *while_stmt = dynamic_cast<AST::WhileStmt *>(cur_item);
 
 			// KIRT generation
-			shared_ptr<BranchInst> branch_inst = std::make_shared<BranchInst>();
-			branch_inst->cond = *ast2kirt(*while_stmt->cond);
+			auto [cond_expr, cond_expr_blocks] = ast2kirt(*while_stmt->cond);
 			BlockList body_blocks = ast2kirt_stmt_or_block(while_stmt->body);
 			BlockList following_blocks = block_item.recur ? ast2kirt(*block_item.recur) : get_unit_blocklist();
 
@@ -323,18 +355,23 @@ BlockList ast2kirt(AST::BlockItem &block_item) {
 			string block_id = std::to_string(block_id_counter.next());
 			body_blocks.blocks.front()->name = "body_" + block_id;
 			following_blocks.blocks.front()->name = "awhile_" + block_id;
+			cond_expr_blocks.blocks.front()->name = "while_" + block_id;
 
-			// Merging
-			BlockList res = get_unit_blocklist();
-			res.blocks.push_front(get_unit_block(res.blocks.back()));
-			res.blocks.back()->name = "while_" + block_id;
-
-			fill_in_empty_terminst_target(body_blocks, res.blocks.back());
+			// Redirection
+			BlockList res = get_unit_blocklist(cond_expr_blocks.blocks.front());
+			fill_in_empty_terminst_target(body_blocks, cond_expr_blocks.blocks.front());
 			fill_in_empty_terminst_target(body_blocks, following_blocks.blocks.front(), jump_inst_t::BREAK);
-			fill_in_empty_terminst_target(body_blocks, res.blocks.back(), jump_inst_t::CONTINUE);
+			fill_in_empty_terminst_target(body_blocks, cond_expr_blocks.blocks.front(), jump_inst_t::CONTINUE);
+
+			// Branching
+			shared_ptr<BranchInst> branch_inst = std::make_shared<BranchInst>();
+			branch_inst->cond = *cond_expr;
 			branch_inst->true_block = body_blocks.blocks.front();
 			branch_inst->false_block = following_blocks.blocks.front();
-			res.blocks.back()->term_inst = std::move(branch_inst);
+			cond_expr_blocks.blocks.back()->term_inst = std::move(branch_inst);
+			
+			// Merging
+			res.blocks << cond_expr_blocks.blocks;
 			res.blocks << body_blocks.blocks;
 			res.blocks << following_blocks.blocks;
 			return res;
@@ -370,69 +407,125 @@ BlockList ast2kirt(AST::VarDef &var_def) {
 	return assign_insts;
 }
 
-shared_ptr<Exp> ast2kirt(AST::Exp &exp) {
-	shared_ptr<Exp> kirt_exp = std::make_shared<Exp>();
+pair<shared_ptr<Exp>, BlockList> ast2kirt(AST::Exp &exp) {
 	switch (exp.type) {
-		case AST::exp_t::NUMBER:
+		case AST::exp_t::NUMBER: {
+			shared_ptr<Exp> kirt_exp = std::make_shared<Exp>();
 			kirt_exp->type = exp_t::NUMBER;
 			kirt_exp->number = exp.number;
-			break;
-		case AST::exp_t::LVAL:
+			return {kirt_exp, get_unit_blocklist()};
+		} case AST::exp_t::LVAL: {
+			shared_ptr<Exp> kirt_exp = std::make_shared<Exp>();
 			kirt_exp->type = exp_t::LVAL;
 			kirt_exp->ident = reg_scope_renamer(exp.lval.get()->ident);
-			break;
-		case AST::exp_t::NEGATIVE:
+			return {kirt_exp, get_unit_blocklist()};
+		} case AST::exp_t::NEGATIVE: {
+			shared_ptr<Exp> kirt_exp = std::make_shared<Exp>();
 			kirt_exp->type = exp_t::SUB;
 			kirt_exp->lhs = std::make_shared<Exp>(0);
-			kirt_exp->rhs = ast2kirt(*exp.rhs);
-			break;
-		case AST::exp_t::LOGICAL_NOT:
+			auto [rhs_exp, rhs_exp_blocks] = ast2kirt(*exp.rhs);
+			kirt_exp->rhs = rhs_exp;
+			return {kirt_exp, rhs_exp_blocks};
+		}
+		case AST::exp_t::LOGICAL_NOT: {
+			shared_ptr<Exp> kirt_exp = std::make_shared<Exp>();
 			kirt_exp->type = exp_t::EQ;
-			kirt_exp->lhs = ast2kirt(*exp.rhs);
+			auto [rhs_exp, rhs_exp_blocks] = ast2kirt(*exp.rhs);
+			kirt_exp->lhs = rhs_exp;
 			kirt_exp->rhs = std::make_shared<Exp>(0);
-			break;
+			return {kirt_exp, rhs_exp_blocks};
+		}
 		case AST::exp_t::LOGICAL_AND: {
-			// a && b = (a!=0) & (b!=0)
-			shared_ptr<Exp> a = ast2kirt(*exp.lhs);
-			shared_ptr<Exp> b = ast2kirt(*exp.rhs);
-			shared_ptr<Exp> a_neq_0 = std::make_shared<Exp>();
-			a_neq_0->type = exp_t::NEQ;
-			a_neq_0->lhs = a;
-			a_neq_0->rhs = std::make_shared<Exp>(0);
+			// a && b = if (a) { $ = b != 0; } else { $ = 0; }
+			string land_id = std::to_string(block_id_counter.next());
+			string res_varid = "%land_res_" + land_id;
+			shared_ptr<Block> final_block = get_unit_block();
+			final_block->name = "land_fin_" + land_id;
+
+			auto [a_exp, a_exp_blocks] = ast2kirt(*exp.lhs);
+			auto [b_exp, b_exp_blocks] = ast2kirt(*exp.rhs);
+
+			// Construct block "$ = (b != 0)"
 			shared_ptr<Exp> b_neq_0 = std::make_shared<Exp>();
-			b_neq_0->type = exp_t::NEQ;
-			b_neq_0->lhs = b;
+			b_neq_0->type = exp_t::NEQ0;
+			b_neq_0->lhs = b_exp;
 			b_neq_0->rhs = std::make_shared<Exp>(0);
-			kirt_exp->type = exp_t::BITWISE_AND;
-			kirt_exp->lhs = a_neq_0;
-			kirt_exp->rhs = b_neq_0;
-			break;
+			shared_ptr<AssignInst> assign_inst_ans_b = get_assign_inst(res_varid, *b_neq_0);
+			b_exp_blocks.blocks.back()->insts.push_back(assign_inst_ans_b);
+			b_exp_blocks.blocks.back()->term_inst = get_jump_inst(final_block);
+			b_exp_blocks.blocks.front()->name = "land_t_" + land_id;
+
+			// Construct block "$ = 0"
+			shared_ptr<Block> else_block = get_unit_block();
+			shared_ptr<AssignInst> assign_inst_ans_0 = get_assign_inst(res_varid, Exp(0));
+			else_block->insts.push_back(assign_inst_ans_0);
+			else_block->term_inst = get_jump_inst(final_block);
+			else_block->name = "land_f_" + land_id;
+
+			a_exp_blocks.blocks.back()->term_inst = get_branch_inst(*a_exp, b_exp_blocks.blocks.front(), else_block);
+
+			BlockList res = a_exp_blocks;
+			res.blocks << b_exp_blocks.blocks;
+			res.blocks.push_back(else_block);
+			res.blocks.push_back(final_block);
+
+			shared_ptr<Exp> final_exp = std::make_shared<Exp>();
+			final_exp->type = exp_t::LVAL;
+			final_exp->ident = res_varid;
+			return {final_exp, res};
 		}
 		case AST::exp_t::LOGICAL_OR: {
-			// a || b = (a!=0) | (b!=0)
-			shared_ptr<Exp> a = ast2kirt(*exp.lhs);
-			shared_ptr<Exp> b = ast2kirt(*exp.rhs);
-			shared_ptr<Exp> a_neq_0 = std::make_shared<Exp>();
-			a_neq_0->type = exp_t::NEQ;
-			a_neq_0->lhs = a;
-			a_neq_0->rhs = std::make_shared<Exp>(0);
+			// a || b = if (a) { $ = 1; } else { $ = b != 0; }
+			string lor_id = std::to_string(block_id_counter.next());
+			string res_varid = "%lor_res_" + lor_id;
+			shared_ptr<Block> final_block = get_unit_block();
+			final_block->name = "lor_fin_" + lor_id;
+
+			auto [a_exp, a_exp_blocks] = ast2kirt(*exp.lhs);
+			auto [b_exp, b_exp_blocks] = ast2kirt(*exp.rhs);
+
+			shared_ptr<AssignInst> assign_inst_ans_1 = get_assign_inst(res_varid, Exp(1));
+			shared_ptr<Block> if_block = get_unit_block();
+			if_block->insts.push_back(assign_inst_ans_1);
+			if_block->term_inst = get_jump_inst(final_block);
+			if_block->name = "lor_t_" + lor_id;
+
 			shared_ptr<Exp> b_neq_0 = std::make_shared<Exp>();
-			b_neq_0->type = exp_t::NEQ;
-			b_neq_0->lhs = b;
+			b_neq_0->type = exp_t::NEQ0;
+			b_neq_0->lhs = b_exp;
 			b_neq_0->rhs = std::make_shared<Exp>(0);
-			kirt_exp->type = exp_t::BITWISE_OR;
-			kirt_exp->lhs = a_neq_0;
-			kirt_exp->rhs = b_neq_0;
-			break;
+			shared_ptr<AssignInst> assign_inst_ans_b = get_assign_inst(res_varid, *b_neq_0);
+			b_exp_blocks.blocks.back()->insts.push_back(assign_inst_ans_b);
+			b_exp_blocks.blocks.back()->term_inst = get_jump_inst(final_block);
+			b_exp_blocks.blocks.front()->name = "lor_f_" + lor_id;
+
+			a_exp_blocks.blocks.back()->term_inst = get_branch_inst(*a_exp, if_block, b_exp_blocks.blocks.front());
+
+			BlockList res = a_exp_blocks;
+			res.blocks.push_back(if_block);
+			res.blocks << b_exp_blocks.blocks;
+			res.blocks.push_back(final_block);
+
+			shared_ptr<Exp> final_exp = std::make_shared<Exp>();
+			final_exp->type = exp_t::LVAL;
+			final_exp->ident = res_varid;
+			return {final_exp, res};
 		}
-		default:
+		default: {
 			// These exp_t can be easily converted to exp_t in KIRT by a simple one-to-one mapping
+			shared_ptr<Exp> kirt_exp = std::make_shared<Exp>();
 			kirt_exp->type = ast_binary_exp_t2kirt_exp_r(exp.type);
-			kirt_exp->lhs = ast2kirt(*exp.lhs);
-			kirt_exp->rhs = ast2kirt(*exp.rhs);
-			break;
+			auto [lhs_exp, lhs_exp_blocks] = ast2kirt(*exp.lhs);
+			auto [rhs_exp, rhs_exp_blocks] = ast2kirt(*exp.rhs);
+			kirt_exp->lhs = lhs_exp;
+			kirt_exp->rhs = rhs_exp;
+			rhs_exp_blocks.blocks.front()->name = "exp_" + std::to_string(block_id_counter.next());	// Just give it a random name
+			lhs_exp_blocks.blocks.back()->term_inst = get_jump_inst(rhs_exp_blocks.blocks.front());
+			lhs_exp_blocks.blocks << rhs_exp_blocks.blocks;
+			return {kirt_exp, lhs_exp_blocks};
+		}
 	}
-	return kirt_exp;
+	assert(0); // The control should never reach here
 }
 
 }
