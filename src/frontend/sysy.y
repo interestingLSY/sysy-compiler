@@ -61,19 +61,23 @@ std::string get_next_useless_var_name() {
   std::string *str_val;
   int int_val;
   AST::Base *ast_val;
+  AST::type_t ast_type_val;
 }
 
 // lexer 返回的所有 token 种类的声明
-%token INT RETURN CONST IF ELSE WHILE BREAK CONTINUE
+%token CONST INT VOID
+%token RETURN IF ELSE WHILE BREAK CONTINUE
 %token LOGICAL_OR LOGICAL_AND EQ NEQ LEQ GEQ
 %token <str_val> IDENT
 %token <int_val> INT_CONST
 
 // 非终结符的类型定义
 %type <int_val> Number
+%type <ast_type_val> Type
 %type <ast_val> TopLevel TopLevelDef_
 %type <ast_val> VarDecl_ VarDef
-%type <ast_val> FuncDef Block BlockBody BlockItem_
+%type <ast_val> FuncDef FuncFParam FuncRParam
+%type <ast_val> Block BlockBody BlockItem_
 %type <ast_val> LVal Exp LOrExp LAndExp EqExp RelExp AddExp MulExp UnaryExp UnaryOp PrimaryExp
 %type <ast_val> Stmt ReturnStmt AssignStmt NopStmt ExpStmt
 %type <ast_val> Stmt_ForceIfWithElse_ IfStmtForceWithElse_ IfStmtMaybeWithoutElse_ StmtOrBlock_ StmtOrBlock_ForceIfWithElse_
@@ -113,11 +117,20 @@ TopLevelDef_
 
 
 VarDecl_
-  : CONST INT VarDef ';' {
+  : CONST Type VarDef ';' {
     $$ = $3;
   }
-  | INT VarDef ';' {
+  | Type VarDef ';' {
     $$ = $2;
+  }
+
+
+Type
+  : INT {
+    $$ = AST::type_t::INT;
+  }
+  | VOID {
+    $$ = AST::type_t::VOID;
   }
 
 
@@ -149,14 +162,38 @@ VarDef
 
 
 FuncDef
-  : INT IDENT '(' ')' Block {
+  : Type IDENT '(' ')' Block {
     auto ast = new AST::FuncDef();
-    ast->ret_type = AST::type_t::INT;
+    ast->ret_type = $1;
     ast->ident = *unique_ptr<string>($2);
     ast->block = cast_uptr<AST::Block>($5);
     $$ = ast;
   }
-  
+  | Type IDENT '(' FuncFParam ')' Block {
+    auto ast = new AST::FuncDef();
+    ast->ret_type = $1;
+    ast->ident = *unique_ptr<string>($2);
+    ast->fparam = cast_uptr<AST::FuncFParam>($4);
+    ast->block = cast_uptr<AST::Block>($6);
+    $$ = ast;
+  }
+
+
+FuncFParam
+  : INT IDENT {
+    auto ast = new AST::FuncFParam();
+    ast->type = AST::type_t::INT;
+    ast->ident = *unique_ptr<string>($2);
+    $$ = ast;
+  }
+  | INT IDENT ',' FuncFParam {
+    auto ast = new AST::FuncFParam();
+    ast->type = AST::type_t::INT;
+    ast->ident = *unique_ptr<string>($2);
+    ast->recur = cast_uptr<AST::FuncFParam>($4);
+    $$ = ast;
+  }
+
 
 Block
   : '{' '}' {
@@ -530,6 +567,33 @@ UnaryExp
   }
   | PrimaryExp {
     $$ = $1;
+  }
+  | IDENT '(' ')' {
+    auto ast = new AST::Exp();
+    ast->type = AST::exp_t::FUNC_CALL;
+    ast->func_name = *unique_ptr<string>($1);
+    $$ = ast;
+  }
+  | IDENT '(' FuncRParam ')' {
+    auto ast = new AST::Exp();
+    ast->type = AST::exp_t::FUNC_CALL;
+    ast->func_name = *unique_ptr<string>($1);
+    ast->func_rparam = cast_uptr<AST::FuncRParam>($3);
+    $$ = ast;
+  }
+
+
+FuncRParam
+  : Exp {
+    auto ast = new AST::FuncRParam();
+    ast->exp = cast_uptr<AST::Exp>($1);
+    $$ = ast;
+  }
+  | Exp ',' FuncRParam {
+    auto ast = new AST::FuncRParam();
+    ast->exp = cast_uptr<AST::Exp>($1);
+    ast->recur = cast_uptr<AST::FuncRParam>($3);
+    $$ = ast;
   }
 
 

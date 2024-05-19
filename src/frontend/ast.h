@@ -7,13 +7,16 @@
 namespace AST {
 
 enum class type_t {
-	INT
+	INT,
+	VOID
 };
 
 enum class exp_t {
 	NUMBER,
 
 	LVAL,
+
+	FUNC_CALL,
 
 	POSITIVE,	// This only appears in UnaryOp
 	NEGATIVE,
@@ -58,6 +61,7 @@ class VarDef;
 
 class FuncDef;
 class FuncType;
+class FuncFParam;
 
 class Block;
 class BlockBody;
@@ -69,6 +73,7 @@ class AssignStmt;
 
 class Exp;
 class LVal;
+class FuncRParam;
 
 // CompUnit - The entire program
 class CompUnit : public Base {
@@ -105,7 +110,18 @@ class FuncDef : public Base {
 public:
 	type_t ret_type;
 	std::string ident;
+	std::unique_ptr<FuncFParam> fparam;
 	std::unique_ptr<Block> block;
+
+	void print(int depth) const;
+};
+
+// FuncFParam: A parameter in a function definition, can be recursive
+class FuncFParam : public Base {
+public:
+	type_t type;
+	std::string ident;
+	std::unique_ptr<FuncFParam> recur;
 
 	void print(int depth) const;
 };
@@ -189,9 +205,19 @@ public:
 	exp_t type;
 
 	int number;	// Only valid when type == NUMBER
+	std::string func_name;	// Only valid when type == FUNC_CALL
+	std::unique_ptr<FuncRParam> func_rparam;	// Only valid when type == FUNC_CALL
 	std::unique_ptr<LVal> lval;	// Only valid when type == LVAL
 	std::unique_ptr<Exp> lhs;	// Valid for binary ops
 	std::unique_ptr<Exp> rhs;	// Valid for binary ops and unary ops
+
+	void print(int depth) const;
+};
+
+class FuncRParam : public Base {
+public:
+	std::unique_ptr<Exp> exp;
+	std::unique_ptr<FuncRParam> recur;
 
 	void print(int depth) const;
 };

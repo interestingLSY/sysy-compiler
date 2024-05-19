@@ -27,6 +27,8 @@ static std::string exp_t2str(exp_t type) {
             return "number";
         case exp_t::LVAL:
             return "lval";
+        case exp_t::FUNC_CALL:
+            return "func_call";
         case exp_t::POSITIVE:
             return "positive";
         case exp_t::NEGATIVE:
@@ -96,7 +98,20 @@ void FuncDef::print(int depth) const {
     cout << indent(depth) << "FuncDef {" << endl;
     cout << indent(depth + 1) << "type: " << type2str(ret_type) << endl;
     cout << indent(depth + 1) << "ident: " << ident << endl;
+    if (fparam) {
+        fparam->print(depth + 1);
+    }
     block->print(depth + 1);
+    cout << indent(depth) << "}" << endl;
+}
+
+void FuncFParam::print(int depth) const {
+    cout << indent(depth) << "FuncFParam {" << endl;
+    cout << indent(depth + 1) << "type: " << type2str(type) << endl;
+    cout << indent(depth + 1) << "ident: " << ident << endl;
+    if (recur) {
+        recur->print(depth);
+    }
     cout << indent(depth) << "}" << endl;
 }
 
@@ -170,11 +185,27 @@ void Exp::print(int depth) const {
         cout << indent(depth+1) << "number: " << number << endl;
     } else if (type == exp_t::LVAL) {
         lval->print(depth + 1);
+    } else if (type == exp_t::FUNC_CALL) {
+        cout << indent(depth+1) << "func_name: " << func_name << endl;
+        if (func_rparam) {
+            func_rparam->print(depth + 1);
+        }
     } else if (is_exp_t_unary(type)) {
         rhs->print(depth + 1);
     } else if (is_exp_t_binary(type)) {
         lhs->print(depth + 1);
         rhs->print(depth + 1);
+    } else {
+        assert(0);
+    }
+    cout << indent(depth) << "}" << endl;
+}
+
+void FuncRParam::print(int depth) const {
+    cout << indent(depth) << "FuncRParam {" << endl;
+    exp->print(depth + 1);
+    if (recur) {
+        recur->print(depth);
     }
     cout << indent(depth) << "}" << endl;
 }
