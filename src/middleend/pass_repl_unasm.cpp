@@ -12,10 +12,14 @@ static void pass_repl_unasm(Exp &exp) {
 		pass_repl_unasm(*exp.lhs);
 	if (exp.rhs)
 		pass_repl_unasm(*exp.rhs);
+	if (exp.args.size())
+		for (auto &arg : exp.args)
+			pass_repl_unasm(*arg);
 
 	auto is_zero = [](const Exp &exp) {
 		return exp.type == exp_t::NUMBER && exp.number == 0;
 	};
+
 	// NOTE Not all times we need to replace the instructions. For example,
 	// althrough RISC-V does not have a EQ instruction, it has BEQ.
 	// So for code like `if (a == b)`, we can use BEQ directly
@@ -79,6 +83,8 @@ static void pass_repl_unasm(Exp &exp) {
 static void pass_repl_unasm(shared_ptr<Inst> &inst) {
 	if (auto assign_inst = dynamic_cast<AssignInst *>(inst.get())) {
 		pass_repl_unasm(assign_inst->exp);
+	} else if (auto exp_inst = dynamic_cast<ExpInst *>(inst.get())) {
+		pass_repl_unasm(exp_inst->exp);
 	} else {
 		assert(0);
 	}
@@ -86,7 +92,8 @@ static void pass_repl_unasm(shared_ptr<Inst> &inst) {
 
 static void pass_repl_unasm(shared_ptr<TermInst> &term_inst) {
 	if (auto ret_inst = dynamic_cast<ReturnInst *>(term_inst.get())) {
-		pass_repl_unasm(ret_inst->ret_exp);
+		if (ret_inst->ret_exp)
+			pass_repl_unasm(*ret_inst->ret_exp);
 	} else if (auto br_inst = dynamic_cast<BranchInst *>(term_inst.get())) {
 		pass_repl_unasm(br_inst->cond);
 	} else if (auto jump_inst = dynamic_cast<JumpInst *>(term_inst.get())) {
@@ -108,7 +115,7 @@ static void pass_repl_unasm(Function &func) {
 
 void pass_repl_unasm(Program &prog) {
 	for (auto &func : prog.funcs)
-		pass_repl_unasm(func);
+		pass_repl_unasm(*func);
 }
 
 }

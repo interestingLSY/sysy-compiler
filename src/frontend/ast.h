@@ -193,6 +193,13 @@ public:
 	void print(int depth) const;
 };
 
+class ExpStmt : public Stmt {
+public:
+	std::unique_ptr<Exp> exp;
+
+	void print(int depth) const;
+};
+
 class LVal : public Base {
 public:
 	std::string ident;

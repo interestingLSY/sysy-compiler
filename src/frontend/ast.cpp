@@ -15,6 +15,8 @@ static std::string type2str(type_t type) {
     switch (type) {
         case type_t::INT:
             return "int";
+        case type_t::VOID:
+            return "void";
         default:
             assert(0);
             return "unknown";
@@ -136,7 +138,8 @@ void NopStmt::print(int depth) const {
 
 void ReturnStmt::print(int depth) const {
     cout << indent(depth) << "ReturnStmt {" << endl;
-    ret_exp->print(depth + 1);
+    if (ret_exp)
+        ret_exp->print(depth + 1);
     cout << indent(depth) << "}" << endl;
 }
 
@@ -170,6 +173,12 @@ void BreakStmt::print(int depth) const {
 
 void ContinueStmt::print(int depth) const {
     cout << indent(depth) << "ContinueStmt" << endl;
+}
+
+void ExpStmt::print(int depth) const {
+    cout << indent(depth) << "ExpStmt {" << endl;
+    exp->print(depth + 1);
+    cout << indent(depth) << "}" << endl;
 }
 
 void LVal::print(int depth) const {

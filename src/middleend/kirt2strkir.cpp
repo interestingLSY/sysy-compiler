@@ -72,6 +72,10 @@ std::vector<string> get_all_varid(const Function &func) {
 			res.push_back(exp.ident);
 		} else if (exp.type == exp_t::EQ0 || exp.type == exp_t::NEQ0) {
 			collect_varids_in_exp(*exp.lhs);
+		} else if (exp.type == exp_t::FUNC_CALL) {
+			for (const shared_ptr<Exp> &arg : exp.args) {
+				collect_varids_in_exp(*arg);
+			}
 		} else {
 			collect_varids_in_exp(*exp.lhs);
 			collect_varids_in_exp(*exp.rhs);
@@ -84,7 +88,8 @@ std::vector<string> get_all_varid(const Function &func) {
 			}
 		}
 		if (const ReturnInst *return_inst = dynamic_cast<ReturnInst*>(block->term_inst.get())) {
-			collect_varids_in_exp(return_inst->ret_exp);
+			if (return_inst->ret_exp)
+				collect_varids_in_exp(*return_inst->ret_exp);
 		}
 	}
 	std::sort(res.begin(), res.end());
@@ -102,16 +107,28 @@ list<string> kirt2str(const JumpInst &jump_inst);
 list<string> kirt2str(const BranchInst &branch_inst);
 list<string> kirt2str(const std::shared_ptr<Inst> &inst);
 list<string> kirt2str(const AssignInst &assign_inst);
+list<string> kirt2str(const ExpInst &exp_inst);
 pair<list<string>, string> kirt2str(const Exp &exp);
 
 list<string> kirt2str(const Program &program) {
 	list<string> res;
+	// Library function declarations
+	res <= list<string>({
+		"decl @getint(): i32",
+		"decl @getch(): i32",
+		"decl @getarray(*i32): i32",
+		"decl @putint(i32)",
+		"decl @putch(i32)",
+		"decl @putarray(i32, *i32)",
+		"decl @starttime()",
+		"decl @stoptime()",
+	});
 	for (const shared_ptr<Inst> &inst : program.global_defs) {
 		list<string> inst_str = kirt2str(inst);
 		res << inst_str;
 	}
-	for (const Function &func : program.funcs) {
-		list<string> func_str = kirt2str(func);
+	for (const shared_ptr<Function> &func : program.funcs) {
+		list<string> func_str = kirt2str(*func);
 		res << func_str;
 	}
 	return res;
@@ -122,12 +139,34 @@ list<string> kirt2str(const Function &func) {
 	temp_reg_cnter.reset();	// Clear the register counter
 
 	list<string> res;
-	res.push_back("fun @" + func.name + "(): " + kirt_type_t2str(func.ret_type) + " {");
-	res.push_back("\%entry:");
+
+	// Forge the function definition line
+	string func_def_line = "fun @" + func.name + "(";
+	for (const FuncFParam &fparam : func.fparams) {
+		if (func_def_line.back() != '(')
+			func_def_line += ", ";
+		func_def_line += fparam.ident+"_param___" + ": " + kirt_type_t2str(fparam.type);
+	}
+	if (func_def_line.back() == ' ' && func_def_line[func_def_line.size() - 2] == ',') {
+		func_def_line.pop_back();
+		func_def_line.pop_back();
+	}
+	func_def_line += ")";
+	if (func.ret_type != type_t::VOID) {
+		func_def_line += ": " + kirt_type_t2str(func.ret_type);
+	}
+	func_def_line += " {";
+	res.push_back(func_def_line);
+
+	// Forge the entry block
+	res.push_back("%entry:");
 	for (string &varid : varids) {
 		res.push_back("  " + varid + " = alloc i32");
 	}
-	res.push_back("  jump \%real_entry");
+	for (const FuncFParam &fparam : func.fparams) {
+		res.push_back("  store " + fparam.ident+"_param___, " + fparam.ident);
+	}
+	res.push_back("  jump %real_entry");
 
 	list<string> blocks_str = kirt2str(func.blocks);
 	res << blocks_str;
@@ -147,7 +186,7 @@ list<string> kirt2str(const BlockList &blocks) {
 
 list<string> kirt2str(const Block &block) {
 	list<string> res;
-	res.push_back("\%" + block.name + ":");
+	res.push_back("%" + block.name + ":");
 	for (const shared_ptr<Inst> &inst : block.insts) {
 		list<string> inst_str = kirt2str(inst);
 		res << inst_str;
@@ -174,9 +213,13 @@ list<string> kirt2str(const std::shared_ptr<TermInst> &term_inst) {
 
 list<string> kirt2str(const ReturnInst &return_inst) {
 	list<string> res;
-	auto [exp_inst_list, exp_coid] = kirt2str(return_inst.ret_exp);
-	res << exp_inst_list;
-	res.push_back("  ret " + exp_coid);
+	if (return_inst.ret_exp) {
+		auto [exp_inst_list, exp_coid] = kirt2str(*return_inst.ret_exp);
+		res << exp_inst_list;
+		res.push_back("  ret " + exp_coid);
+	} else {
+		res.push_back("  ret");
+	}
 	return res;
 }
 
@@ -205,6 +248,8 @@ list<string> kirt2str(const BranchInst &branch_inst) {
 list<string> kirt2str(const std::shared_ptr<Inst> &inst) {
 	if (const AssignInst *assign_inst = dynamic_cast<AssignInst*>(inst.get())) {
 		return kirt2str(*assign_inst);
+	} else if (const ExpInst *exp_inst = dynamic_cast<ExpInst*>(inst.get())) {
+		return kirt2str(*exp_inst);
 	} else {
 		assert(0);
 	}
@@ -219,6 +264,13 @@ list<string> kirt2str(const AssignInst &AssignInst) {
 	return res;
 }
 
+list<string> kirt2str(const ExpInst &exp_inst) {
+	list<string> res;
+	auto [exp_inst_list, exp_coid] = kirt2str(exp_inst.exp);
+	res << exp_inst_list;
+	return res;
+}
+
 pair<list<string>, string> kirt2str(const Exp &exp) {
 	if (exp.type == exp_t::NUMBER) {
 		return { {}, std::to_string(exp.number) };
@@ -226,6 +278,38 @@ pair<list<string>, string> kirt2str(const Exp &exp) {
 		string res_coid = "%" + std::to_string(temp_reg_cnter.next());
 		string load_inst = format("  %s = load %s", res_coid.c_str(), exp.ident.c_str());
 		return { { load_inst }, res_coid };
+	} else if (exp.type == exp_t::FUNC_CALL) {
+		assert(KIRT::func_map.count(exp.ident));
+		shared_ptr<Function> func = KIRT::func_map[exp.ident];
+		list<string> res;
+
+		vector<string> args_coid;
+		for (const shared_ptr<Exp> &arg : exp.args) {
+			auto [arg_inst_list, arg_coid] = kirt2str(*arg);
+			res << arg_inst_list;
+			args_coid.push_back(arg_coid);
+		}
+
+		string call_inst = "  ";
+		string res_coid;
+		if (func->ret_type == type_t::VOID) {
+		} else if (func->ret_type == type_t::INT) {
+			res_coid = "%" + std::to_string(temp_reg_cnter.next());
+			call_inst += res_coid + " = ";
+		} else {
+			assert(0);
+		}
+
+		call_inst += format("call @%s(", exp.ident.c_str());
+		for (size_t i = 0; i < args_coid.size(); i++) {
+			call_inst += args_coid[i];
+			if (i + 1 < args_coid.size())
+				call_inst += ", ";
+		}
+		call_inst += ")";
+		
+		res.push_back(call_inst);
+		return { res, res_coid };
 	} else if (exp.type == exp_t::EQ0 || exp.type == exp_t::NEQ0) {
 		assert (exp.lhs);
 		auto [lhs_inst_list, lhs_coid] = kirt2str(*exp.lhs);

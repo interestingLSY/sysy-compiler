@@ -14,9 +14,10 @@ using std::pair;
 // The register scope renamer
 // With the introduction of scoping, variable from different scopes may have the same name
 // To avoid confusion, we rename the variables to a unique name:
-//	@original_name_lvlevel
+//	@<original_name>_lv<level>
 // Each time we enter a new scope, we increment the level. When we leave the
 // scope, we decrement the level.
+// TODO This renamer is inefficient. Redesign the algorithm
 class RegScopeRenamer {
 private:
 	int cur_lvl = 0;	// Current level
@@ -129,6 +130,8 @@ type_t ast_type_t2kirt_type_t(AST::type_t ast_type_t) {
 	switch (ast_type_t) {
 		case AST::type_t::INT:
 			return type_t::INT;
+		case AST::type_t::VOID:
+			return type_t::VOID;
 		default:
 			assert(0);
 	}
@@ -178,15 +181,36 @@ BlockList ast2kirt(AST::VarDef &var_def);
 pair<shared_ptr<Exp>, BlockList> ast2kirt(AST::Exp &exp);
 
 Program ast2kirt(AST::CompUnit &comp_unit) {
+	block_id_counter.reset();
+	// Register library functions
+	auto register_library_function = [&](string name, vector<type_t> args_type, type_t ret_type) {
+		shared_ptr<Function> func_ptr = std::make_shared<Function>();
+		func_ptr->ret_type = ret_type;
+		func_ptr->name = name;
+		for (type_t arg_type : args_type) {
+			func_ptr->fparams.push_back(FuncFParam {arg_type, "arg"});
+		}
+		KIRT::func_map[name] = func_ptr;
+	};
+	register_library_function("getint", {}, type_t::INT);
+	register_library_function("getch", {}, type_t::INT);
+	// register_library_function("getarray", {??}, type_t::INT);
+	register_library_function("putint", {type_t::INT}, type_t::VOID);
+	register_library_function("putch", {type_t::INT}, type_t::VOID);
+	// register_library_function("putarray", {??}, type_t::VOID);
+	register_library_function("starttime", {}, type_t::VOID);
+	register_library_function("stoptime", {}, type_t::VOID);
+
 	return ast2kirt(*comp_unit.top_level);
 }
 
 Program ast2kirt(AST::TopLevel &top_level) {
-	block_id_counter.reset();
 	Program program;
 	if (is_instance_of(top_level.def.get(), AST::FuncDef*)) {
 		Function func = ast2kirt(*dynamic_cast<AST::FuncDef *>(top_level.def.get()));
-		program.funcs.emplace_back(func);
+		shared_ptr<Function> func_ptr = std::make_shared<Function>(func);
+		program.funcs.emplace_back(func_ptr);
+		KIRT::func_map[func.name] = func_ptr;
 	} else {
 		// NOTE def may be a declaration of const/var, will be implemented in the future
 		assert(0);
@@ -197,26 +221,52 @@ Program ast2kirt(AST::TopLevel &top_level) {
 		program.funcs << sub_program.funcs;
 		program.global_defs << sub_program.global_defs;
 	}
+
 	return program;
 }
 
 Function ast2kirt(AST::FuncDef &func_def) {
+	reg_scope_renamer.on_enter_scope();
+
 	Function func;
 	func.ret_type = ast_type_t2kirt_type_t(func_def.ret_type);
 	func.name = func_def.ident;
-	func.blocks = ast2kirt(*func_def.block);
-	func.blocks.blocks.front()->name = "real_entry";	// The `entry` block performs some initialization, and "real_entry" is the real entry
 
+	std::unique_ptr<AST::FuncFParam>* cur_fparam = &func_def.fparam;
+	while (cur_fparam->get()) {
+		AST::FuncFParam *fparam = cur_fparam->get();
+		reg_scope_renamer.on_define_var(fparam->ident);
+		func.fparams.push_back(FuncFParam {
+			ast_type_t2kirt_type_t(fparam->type),
+			reg_scope_renamer(fparam->ident)
+		});
+		cur_fparam = &(cur_fparam->get()->recur);
+	}
+
+	func.blocks = ast2kirt(*func_def.block);
+	func.blocks.blocks.front()->name = "real_entry";	// The `entry` block performs some initialization, and "real_entry" is the real entry	
+	
 	// Construct the epilogue block
 	shared_ptr<ReturnInst> epilogue_block_ret_inst = std::make_shared<ReturnInst>();
-	epilogue_block_ret_inst->ret_exp.type = exp_t::NUMBER;
-	epilogue_block_ret_inst->ret_exp.number = 0;
+	if (func.ret_type == type_t::VOID) {
+		epilogue_block_ret_inst->ret_exp = nullptr;
+	} else if (func.ret_type == type_t::INT) {
+		std::shared_ptr<Exp> ret_exp = std::make_shared<Exp>();
+		ret_exp->type = exp_t::NUMBER;
+		ret_exp->number = 0;
+		epilogue_block_ret_inst->ret_exp = ret_exp;
+	} else {
+		assert(0);
+	}
 	shared_ptr<Block> epilogue_block = get_unit_block();
 	epilogue_block->name = "epilogue";
 	epilogue_block->term_inst = epilogue_block_ret_inst;
 
 	fill_in_empty_terminst_target(func.blocks, epilogue_block);
 	func.blocks.blocks.push_back(epilogue_block);
+
+	reg_scope_renamer.on_exit_scope();
+
 	return func;
 }
 
@@ -263,11 +313,18 @@ BlockList ast2kirt(AST::BlockItem &block_item) {
 
 		if (is_instance_of(cur_item, AST::ReturnStmt*)) {
 			AST::ReturnStmt *return_stmt = dynamic_cast<AST::ReturnStmt *>(cur_item);
-			shared_ptr<ReturnInst> return_inst = std::make_shared<ReturnInst>();
-			auto [ret_exp, ret_exp_blocks] = ast2kirt(*return_stmt->ret_exp);
-			return_inst->ret_exp = *ret_exp;
-			ret_exp_blocks.blocks.back()->term_inst = std::move(return_inst);
-			return ret_exp_blocks;
+			if (return_stmt->ret_exp) {
+				shared_ptr<ReturnInst> return_inst = std::make_shared<ReturnInst>();
+				auto [ret_exp, ret_exp_blocks] = ast2kirt(*return_stmt->ret_exp);
+				return_inst->ret_exp = ret_exp;
+				ret_exp_blocks.blocks.back()->term_inst = std::move(return_inst);
+				return ret_exp_blocks;
+			} else {
+				BlockList res = get_unit_blocklist();
+				shared_ptr<ReturnInst> return_inst = std::make_shared<ReturnInst>();
+				res.blocks.front()->term_inst = std::move(return_inst);
+				return res;
+			}
 		}
 
 		if (is_instance_of(cur_item, AST::BreakStmt*)) {
@@ -298,6 +355,29 @@ BlockList ast2kirt(AST::BlockItem &block_item) {
 			BlockList following_blocks = block_item.recur ? ast2kirt(*block_item.recur) : get_unit_blocklist();
 			following_blocks.blocks.front()->name = "aassign_" + std::to_string(block_id_counter.next());
 			exp_blocks.blocks.back()->term_inst = get_jump_inst(following_blocks.blocks.front());
+			exp_blocks.blocks << following_blocks.blocks;
+			return exp_blocks;
+		}
+
+		if (is_instance_of(cur_item, AST::ExpStmt*)) {
+			int exp_id = block_id_counter.next();
+
+			AST::ExpStmt *exp_stmt = dynamic_cast<AST::ExpStmt *>(cur_item);
+			auto [exp, exp_blocks] = ast2kirt(*exp_stmt->exp);
+
+			shared_ptr<ExpInst> exp_inst = std::make_shared<ExpInst>();
+			exp_inst->exp = *exp;
+			shared_ptr<Block> exp_inst_block = get_unit_block();
+			exp_inst_block->insts.push_back(exp_inst);
+			exp_inst_block->name = "exp_" + std::to_string(exp_id);
+
+			BlockList following_blocks = block_item.recur ? ast2kirt(*block_item.recur) : get_unit_blocklist();
+			following_blocks.blocks.front()->name = "aexp_" + std::to_string(exp_id);
+
+			exp_blocks.blocks.back()->term_inst = get_jump_inst(exp_inst_block);
+			exp_inst_block->term_inst = get_jump_inst(following_blocks.blocks.front());
+
+			exp_blocks.blocks.push_back(exp_inst_block);
 			exp_blocks.blocks << following_blocks.blocks;
 			return exp_blocks;
 		}
@@ -419,6 +499,31 @@ pair<shared_ptr<Exp>, BlockList> ast2kirt(AST::Exp &exp) {
 			kirt_exp->type = exp_t::LVAL;
 			kirt_exp->ident = reg_scope_renamer(exp.lval.get()->ident);
 			return {kirt_exp, get_unit_blocklist()};
+		} case AST::exp_t::FUNC_CALL: {
+			shared_ptr<Exp> kirt_exp = std::make_shared<Exp>();
+			kirt_exp->type = exp_t::FUNC_CALL;
+			kirt_exp->ident = exp.func_name;
+
+			BlockList res = get_unit_blocklist();
+			std::unique_ptr<AST::FuncRParam>* cur_rparam = &exp.func_rparam;
+			int cur_rparam_id = 0;
+			while (cur_rparam->get()) {
+				auto [rparam_exp, rparam_exp_blocks] = ast2kirt(*(*cur_rparam)->exp);
+				fill_in_empty_terminst_target(res, rparam_exp_blocks.blocks.front());
+				rparam_exp_blocks.blocks.front()->name = format(
+					"func_%s_rparam_%d_%d",
+					exp.func_name.c_str(),
+					cur_rparam_id,
+					block_id_counter.next()
+				);
+				
+				kirt_exp->args.push_back(rparam_exp);
+				res.blocks << rparam_exp_blocks.blocks;
+
+				cur_rparam = &(cur_rparam->get()->recur);
+				cur_rparam_id += 1;
+			}
+			return {kirt_exp, res};
 		} case AST::exp_t::NEGATIVE: {
 			shared_ptr<Exp> kirt_exp = std::make_shared<Exp>();
 			kirt_exp->type = exp_t::SUB;

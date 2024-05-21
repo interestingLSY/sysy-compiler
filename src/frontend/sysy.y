@@ -35,16 +35,6 @@ std::unique_ptr<TARGET> cast_uptr(AST::Base *base) {
   );
 }
 
-// A counter for generating unique variable names
-// These variables are mainly unnamed useless variables, like "EXP;" statement
-// which is equivalent to "int XXXXX = EXP;"
-Counter useless_var_counter;
-std::string get_next_useless_var_name() {
-  // NOTE We use __useless__ as the prefix of the variable name. This may lead
-  // to collision if the bitch-son user named a variable in this way
-  return "__useless__" + to_string(useless_var_counter.next());
-}
-
 %}
 
 // 定义 parser 函数和错误处理函数的附加参数
@@ -303,6 +293,11 @@ ReturnStmt
     ast->ret_exp = cast_uptr<AST::Exp>($2);
     $$ = ast;
   }
+  | RETURN ';' {
+    auto ast = new AST::ReturnStmt();
+    ast->ret_exp = nullptr;
+    $$ = ast;
+  }
   
 
 AssignStmt
@@ -405,9 +400,8 @@ NopStmt
 ExpStmt
   : Exp ';' {
     // EXP; <=> int XXXXX = EXP;
-    auto ast = new AST::VarDef();
-    ast->ident = get_next_useless_var_name();
-    ast->init_val = cast_uptr<AST::Exp>($1);
+    auto ast = new AST::ExpStmt();
+    ast->exp = cast_uptr<AST::Exp>($1);
     $$ = ast;
   }
 

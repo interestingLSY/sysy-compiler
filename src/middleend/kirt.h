@@ -5,6 +5,7 @@
 #include <memory>
 #include <string>
 #include <vector>
+#include <map>
 
 namespace KIRT {
 
@@ -14,13 +15,16 @@ using std::shared_ptr;
 using std::vector;
 
 enum class type_t {
-	INT
+	INT,
+	VOID
 };
 
 enum class exp_t {
 	NUMBER,
 
 	LVAL,
+
+	FUNC_CALL,
 
 	// POSITIVE won't appear in the final AST
 	// NEGATIVE will be converted to SUB
@@ -56,6 +60,7 @@ class Inst;
 class TermInst;
 class Block;
 class BlockList;
+class FuncFParam;
 class Function;
 class Program;
 
@@ -64,9 +69,10 @@ class Exp {
 public:
 	exp_t type;
 	int number;		// For NUMBER
-	string ident;	// For LVAL
+	string ident;	// For LVAL or FUNC_CALL
 	shared_ptr<Exp> lhs;
 	shared_ptr<Exp> rhs;
+	vector<shared_ptr<Exp>> args;	// For FUNC_CALL
 
 	Exp() = default;
 	Exp(int x) : type(exp_t::NUMBER), number(x) {}
@@ -82,6 +88,11 @@ public:
 class AssignInst : public Inst {
 public:
 	string ident;
+	Exp exp;
+};
+
+class ExpInst : public Inst {
+public:
 	Exp exp;
 };
 
@@ -117,7 +128,7 @@ public:
 
 class ReturnInst : public TermInst {
 public:
-	Exp ret_exp;
+	std::shared_ptr<Exp> ret_exp;	// is nullptr if the function returns void
 };
 
 // Block - A basic block
@@ -171,11 +182,20 @@ public:
 };
 
 
+// FuncFParam - A function formal parameter
+class FuncFParam {
+public:
+	type_t type;
+	string ident;
+};
+
+
 // Function - A function definition
 class Function {
 public:
 	type_t ret_type;
 	string name;
+	vector<FuncFParam> fparams;
 	BlockList blocks;
 };
 
@@ -184,7 +204,9 @@ public:
 class Program {
 public:
 	list<std::shared_ptr<Inst>> global_defs;
-	list<Function> funcs;
+	list<std::shared_ptr<Function>> funcs;
 };
+
+extern std::map<string, std::shared_ptr<Function>> func_map;
 
 }

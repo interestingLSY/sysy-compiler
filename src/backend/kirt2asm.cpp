@@ -12,6 +12,7 @@ using std::list;
 using std::pair;
 using std::string;
 using std::shared_ptr;
+using std::vector;
 
 enum class reg_alloc_stat_t {
 	REG,
@@ -80,8 +81,38 @@ public:
 		ident2stat.clear();
 	}
 
-	int get_max_stack_size() {
-		return stack_var_cnt*4;
+	int get_max_num_local_vars() {
+		return stack_var_cnt;
+	}
+
+	// Called when defining a function argument
+	list<string> on_new_func_arg(string ident, int kth, int total_local_var_and_saved_regs) {
+		// kth starts from 0
+		// `total_local_var_and_saved_regs` is (address of the 8th argument) - (final sp), in bytes
+		// Currently we save all function arguments to the stack
+		ident2stat[ident] = {reg_alloc_stat_t::STACK, stack_var_cnt*4};
+		stack_var_cnt += 1;
+		// Save the variable to the stack
+		if (kth <= 7) {
+			return {
+				format(
+					"  sw a%d, %d(sp)",
+					kth,
+					(stack_var_cnt-1)*4
+				)
+			};
+		} else {
+			return {
+				format(
+					"  lw t0, %d(sp)",
+					4*(kth-8) + (total_local_var_and_saved_regs)*4
+				),
+				format(
+					"  sw t0, %d(sp)",
+					(stack_var_cnt-1)*4
+				)
+			};
+		}
 	}
 
 	// Called when loading an identifer
@@ -117,6 +148,10 @@ static string kirt_exp_t2asm(KIRT::exp_t type) {
 	switch (type) {
 		case KIRT::exp_t::NUMBER:
 			assert(0);
+		case KIRT::exp_t::LVAL:
+			assert(0);
+		case KIRT::exp_t::FUNC_CALL:
+			assert(0);
 		case KIRT::exp_t::ADD:
 			return "add";
 		case KIRT::exp_t::SUB:
@@ -148,6 +183,10 @@ static string kirt_exp_t2asm(KIRT::exp_t type) {
 	}
 }
 
+const vector<string> callee_saved_regs({
+	"ra", "s0", "s1", "s2", "s3", "s4", "s5", "s6", "s7", "s8", "s9", "s10", "s11"
+});
+
 // Some global status
 Counter virt_ident_counter;	// A counter for generating virtual identifer
 string cur_func_name;	// Current function name
@@ -165,11 +204,9 @@ pair<list<string>, string> kirt2asm(const KIRT::Exp &inst);
 
 list<string> kirt2asm(const KIRT::Program &prog) {
 	list<string> res;
-	res.push_back(".text");
-	res.push_back(".globl main");
 
-	for (const KIRT::Function &func : prog.funcs) {
-		list<string> func_asm = kirt2asm(func);
+	for (const std::shared_ptr<KIRT::Function> &func : prog.funcs) {
+		list<string> func_asm = kirt2asm(*func);
 		res << func_asm;
 	}
 
@@ -180,33 +217,78 @@ list<string> kirt2asm(const KIRT::Function &func) {
 	reg_allocator.on_enter_function();
 	cur_func_name = func.name;
 
-	cur_func_epilogue.clear();
-	cur_func_epilogue.push_back("  lw t0, 0(sp)");
-	cur_func_epilogue.push_back("  add sp, sp, t0");
+	// Construct the epilogue
+	{
+		cur_func_epilogue.clear();
+		cur_func_epilogue.push_back("  lw t0, 0(sp)");
+		cur_func_epilogue.push_back("  add sp, sp, t0");
+		// TODO Sometimes we do not utilize all registers, hence do not need to
+		// store & restore all callee-saved registers
+		for (auto it = callee_saved_regs.rbegin(); it != callee_saved_regs.rend(); ++it) {
+			cur_func_epilogue.push_back(format(
+				"  lw %s, 0(sp)",
+				it->c_str()
+			));
+			// TODO Optimize this addition
+			cur_func_epilogue.push_back("  addi sp, sp, 4");
+		}
+	}
 
 	list<string> res;
+
+	int stack_frame_length;	// in 4 bytes, include local vars, but does not include saved regs
+	// stack_frame_length = reg_allocator.get_max_num_local_vars() + 1;	// +1 for the "stack frame length" (stored at 0(sp))
+	stack_frame_length = 400 + 1 + std::max(0, (int)func.fparams.size()-8);	// +1 for the "stack frame length" (stored at 0(sp))
+	if (stack_frame_length % 4 != 0) {
+		stack_frame_length += 4 - (stack_frame_length % 4);
+	}
+
+	// Arguments registration
+	int total_local_var_and_saved_regs = callee_saved_regs.size() + stack_frame_length;
+	for (int i = 0; i < func.fparams.size(); i++) {
+		const KIRT::FuncFParam &param = func.fparams[i];
+		list<string> save_arg_insts = reg_allocator.on_new_func_arg(param.ident, i, total_local_var_and_saved_regs);
+		res << save_arg_insts;
+	}
+
 	for (const std::shared_ptr<KIRT::Block> &block : func.blocks.blocks) {
 		list<string> block_asm = kirt2asm(*block);
 		res << block_asm;
 	}
 
-	list<string> prolouge;
-	prolouge.push_back(func.name + ":");
+	assert (reg_allocator.get_max_num_local_vars() <= 400);
 
-	int space_to_alloc = reg_allocator.get_max_stack_size() + 4;	// +4 for the stack frame length
-	if (space_to_alloc % 16 != 0) {
-		space_to_alloc += 16 - (space_to_alloc % 16);
+	// Construct the prologue
+	{
+		list<string> prolouge;
+		// Function declaration
+		prolouge.push_back("  .text");
+		prolouge.push_back("  .globl " + func.name);
+		prolouge.push_back(func.name + ":");
+
+		// Save registers
+		// TODO Optmize `main()` does not need to save & store registers
+		for (const string &reg : callee_saved_regs) {
+			// TODO Optimize this subtraction
+			prolouge.push_back("  addi sp, sp, -4");
+			prolouge.push_back(format(
+				"  sw %s, 0(sp)",
+				reg.c_str()
+			));
+		}
+
+		// Stack frame allocation
+		// TODO Optimize when space_to_alloc == 0
+		// TODO Optimize when space_to_alloc <= 2047
+		prolouge.push_back(format(
+			"  li t0, %d",
+			stack_frame_length*4
+		));
+		prolouge.push_back("  sub sp, sp, t0");
+		prolouge.push_back("  sw t0, 0(sp)");
+
+		prolouge >> res;
 	}
-	// TODO Optimize when space_to_alloc == 0
-	// TODO Optimize when space_to_alloc <= 2047
-	prolouge.push_back(format(
-		"  li t0, %d",
-		space_to_alloc
-	));
-	prolouge.push_back("  sub sp, sp, t0");
-	prolouge.push_back("  sw t0, 0(sp)");
-
-	prolouge >> res;
 
 	return res;
 }
@@ -242,6 +324,9 @@ list<string> kirt2asm(const shared_ptr<KIRT::Inst> &inst) {
 			exp_alloc_stat.get_target_regid().c_str()
 		));
 		res <= target_alloc_stat.get_store_inst();
+	} else if (const KIRT::ExpInst *exp_inst = dynamic_cast<const KIRT::ExpInst *>(inst.get())) {
+		auto [exp_inst_list, exp_virt_ident] = kirt2asm(exp_inst->exp);
+		res << exp_inst_list;
 	} else {
 		assert(0);
 	}
@@ -252,15 +337,17 @@ list<string> kirt2asm(const shared_ptr<KIRT::TermInst> &inst) {
 	list<string> res;
 
 	if (const KIRT::ReturnInst *ret_inst = dynamic_cast<const KIRT::ReturnInst *>(inst.get())) {
-		auto [exp_inst_list, exp_virt_ident] = kirt2asm(ret_inst->ret_exp);
-		res << exp_inst_list;
-		
-		RegAllocStat exp_alloc_stat = reg_allocator.on_load(exp_virt_ident);
-		res <= exp_alloc_stat.get_load_inst();
-		res.push_back(format(
-			"  mv a0, %s",
-			exp_alloc_stat.get_target_regid().c_str()
-		));
+		if (ret_inst->ret_exp) {
+			auto [exp_inst_list, exp_virt_ident] = kirt2asm(*ret_inst->ret_exp);
+			res << exp_inst_list;
+			
+			RegAllocStat exp_alloc_stat = reg_allocator.on_load(exp_virt_ident);
+			res <= exp_alloc_stat.get_load_inst();
+			res.push_back(format(
+				"  mv a0, %s",
+				exp_alloc_stat.get_target_regid().c_str()
+			));
+		}
 		res <= cur_func_epilogue;
 		res.push_back("  ret");
 	} else if (const KIRT::JumpInst *jump_inst = dynamic_cast<const KIRT::JumpInst *>(inst.get())) {
@@ -295,11 +382,74 @@ list<string> kirt2asm(const shared_ptr<KIRT::TermInst> &inst) {
 	return res;
 }
 
+// Return: (instruction list, result virtual identifier)
 pair<list<string>, string> kirt2asm(const KIRT::Exp &exp) {
 	list<string> res;
 	if (exp.type == KIRT::exp_t::LVAL) {
 		string ident = exp.ident;
 		return {res, ident};
+	} else if (exp.type == KIRT::exp_t::FUNC_CALL) {
+		string res_virt_ident = format("v%d", virt_ident_counter.next());
+		RegAllocStat res_reg_alloc_stat = reg_allocator.on_store(res_virt_ident);
+
+		int num_args = exp.args.size();
+		vector<string> arg_virt_idents;
+
+		// Calculate args
+		for (int i = 0; i < exp.args.size(); ++i) {
+			auto [arg_inst_list, arg_virt_ident] = kirt2asm(*exp.args[i]);
+			res << arg_inst_list;
+			arg_virt_idents.push_back(arg_virt_ident);
+		}
+		// Place args
+		for (int i = 0; i < exp.args.size(); ++i) {
+			string arg_virt_ident = arg_virt_idents[i];
+			if (i <= 7) {
+				// Save the argument to the register
+				RegAllocStat arg_alloc_stat = reg_allocator.on_load(arg_virt_ident);
+				res <= arg_alloc_stat.get_load_inst();
+				res.push_back(format(
+					"  mv a%d, %s",
+					i,
+					arg_alloc_stat.get_target_regid().c_str()
+				));
+			} else {
+				// Save the argument to the stack
+				RegAllocStat arg_alloc_stat = reg_allocator.on_load(arg_virt_ident);
+				res <= arg_alloc_stat.get_load_inst();
+				res.push_back(format(
+					"  sw %s, %d(sp)",
+					arg_alloc_stat.get_target_regid().c_str(),
+					-(num_args-i)*4
+				));
+			}
+		}
+		// Adjust SP
+		if (num_args > 8) {
+			res.push_back(format(
+				"  addi sp, sp, -%d",
+				(num_args-8)*4
+			));
+		}
+		// Call
+		res.push_back(format(
+			"  call %s",
+			exp.ident.c_str()
+		));
+		// Restore SP
+		if (num_args > 8) {
+			res.push_back(format(
+				"  addi sp, sp, %d",
+				(num_args-8)*4
+			));
+		}
+		// Save the return value
+		res.push_back(format(
+			"  mv %s, a0",
+			res_reg_alloc_stat.get_target_regid().c_str()
+		));
+		res <= res_reg_alloc_stat.get_store_inst();
+		return {res, res_virt_ident};
 	} else {
 		string res_virt_ident = format("v%d", virt_ident_counter.next());
 		RegAllocStat res_reg_alloc_stat = reg_allocator.on_store(res_virt_ident);
