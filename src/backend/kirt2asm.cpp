@@ -61,10 +61,11 @@ struct RegAllocStat {
 			};
 		} else if (type == reg_alloc_stat_t::STACK) {
 			return {
+				format("  li t2, %d", id),
+				format("  add t2, sp, t2"),
 				format(
-					"  lw %s, %d(sp)",
-					is_rhs ? "t1" : "t0",
-					id
+					"  lw %s, 0(t2)",
+					is_rhs ? "t1" : "t0"
 				)
 			};
 		} else {
@@ -89,8 +90,10 @@ struct RegAllocStat {
 			};
 		} else if (type == reg_alloc_stat_t::STACK) {
 			return {
+				format("  li t2, %d", id),
+				format("  add t2, sp, t2"),
 				format(
-					"  sw t0, %d(sp)",
+					"  sw t0, 0(t2)",
 					id
 				)
 			};
@@ -127,22 +130,18 @@ public:
 		// Save the variable to the stack
 		if (kth <= 7) {
 			return {
-				format(
-					"  sw a%d, %d(sp)",
-					kth,
-					(stack_var_cnt-1)*4
-				)
+				format("  li t0, %d", (stack_var_cnt-1)*4),
+				format("  add t0, sp, t0"),
+				format("  sw a%d, 0(t0)", kth)
 			};
 		} else {
 			return {
-				format(
-					"  lw t0, %d(sp)",
-					4*(kth-8) + (total_local_var_and_saved_regs)*4
-				),
-				format(
-					"  sw t0, %d(sp)",
-					(stack_var_cnt-1)*4
-				)
+				format("  li t0, %d", 4*(kth-8) + (total_local_var_and_saved_regs)*4),
+				format("  add t0, sp, t0"),
+				format("  lw t1, 0(t0)"),
+				format("  li t0, %d", (stack_var_cnt-1)*4),
+				format("  add t0, sp, t0"),
+				format("  sw t1, 0(t0)")
 			};
 		}
 	}
@@ -155,12 +154,9 @@ public:
 		if (KIRT::global_decl_map.count(ident)) {
 			return {reg_alloc_stat_t::GLOBAL, 0, ident.substr(1)};
 		}
-		if (!ident2stat.count(ident)) {
-			ident2stat[ident] = {reg_alloc_stat_t::STACK, stack_var_cnt*4, ""};
-			stack_var_cnt += 1;
-		}
+		my_assert (ident2stat.count(ident), 9);
 		RegAllocStat stat = ident2stat[ident];
-		assert (stat.type == reg_alloc_stat_t::STACK);
+		my_assert (stat.type == reg_alloc_stat_t::STACK, 11);
 		return stat;
 	}
 
@@ -173,11 +169,12 @@ public:
 			return {reg_alloc_stat_t::GLOBAL, 0, ident.substr(1)};
 		}
 		if (!ident2stat.count(ident)) {
-			ident2stat[ident] = {reg_alloc_stat_t::STACK, stack_var_cnt*4, ""};
+			int stack_offset = stack_var_cnt*4;
 			stack_var_cnt += 1;
+			ident2stat[ident] = {reg_alloc_stat_t::STACK, stack_offset, ""};
 		}
 		RegAllocStat stat = ident2stat[ident];
-		assert (stat.type == reg_alloc_stat_t::STACK);
+		my_assert (stat.type == reg_alloc_stat_t::STACK, 12);
 		return stat;
 	}
 } reg_allocator;
@@ -185,11 +182,11 @@ public:
 static string kirt_exp_t2asm(KIRT::exp_t type) {
 	switch (type) {
 		case KIRT::exp_t::NUMBER:
-			assert(0);
+			my_assert(0, 13);
 		case KIRT::exp_t::LVAL:
-			assert(0);
+			my_assert(0, 14);
 		case KIRT::exp_t::FUNC_CALL:
-			assert(0);
+			my_assert(0, 15);
 		case KIRT::exp_t::ADD:
 			return "add";
 		case KIRT::exp_t::SUB:
@@ -217,7 +214,7 @@ static string kirt_exp_t2asm(KIRT::exp_t type) {
 		case KIRT::exp_t::SAR:
 			return "sra";
 		default:
-			assert(0);
+			my_assert(0, 16);
 	}
 }
 
@@ -290,7 +287,7 @@ list<string> kirt2asm(const KIRT::Function &func) {
 
 	int stack_frame_length;	// in 4 bytes, include local vars, but does not include saved regs
 	// stack_frame_length = reg_allocator.get_max_num_local_vars() + 1;	// +1 for the "stack frame length" (stored at 0(sp))
-	stack_frame_length = 400 + 1 + std::max(0, (int)func.fparams.size()-8);	// +1 for the "stack frame length" (stored at 0(sp))
+	stack_frame_length = 1000 + 1 + std::max(0, (int)func.fparams.size()-8);	// +1 for the "stack frame length" (stored at 0(sp))
 	if (stack_frame_length % 4 != 0) {
 		stack_frame_length += 4 - (stack_frame_length % 4);
 	}
@@ -308,7 +305,7 @@ list<string> kirt2asm(const KIRT::Function &func) {
 		res << block_asm;
 	}
 
-	assert (reg_allocator.get_max_num_local_vars() <= 400);
+	my_assert (reg_allocator.get_max_num_local_vars() <= 1000, 17);
 
 	// Construct the prologue
 	{
@@ -379,7 +376,7 @@ list<string> kirt2asm(const shared_ptr<KIRT::Inst> &inst) {
 		auto [exp_inst_list, exp_virt_ident] = kirt2asm(exp_inst->exp);
 		res << exp_inst_list;
 	} else {
-		assert(0);
+		my_assert(0, 18);
 	}
 	return res;
 }
@@ -427,7 +424,7 @@ list<string> kirt2asm(const shared_ptr<KIRT::TermInst> &inst) {
 			rename_block(branch_inst->false_block->name).c_str()
 		));
 	} else {
-		assert(0);
+		my_assert(0, 19);
 	}
 
 	return res;
