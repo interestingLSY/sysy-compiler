@@ -122,15 +122,26 @@ list<string> kirt2str(const Program &program) {
 		"decl @putarray(i32, *i32)",
 		"decl @starttime()",
 		"decl @stoptime()",
+		""
 	});
-	for (const shared_ptr<Inst> &inst : program.global_defs) {
-		list<string> inst_str = kirt2str(inst);
-		res << inst_str;
+
+	// Global variable declarations
+	for (const shared_ptr<GlobalDecl> &global_decl : program.global_decls) {
+		string command = format(
+			"global %s = alloc %s, zeroinit",
+			global_decl->ident.c_str(),
+			"i32"	// TODO support array type
+		);
+		res.push_back(command);
 	}
+	res.push_back("");
+
+	// Function definitions
 	for (const shared_ptr<Function> &func : program.funcs) {
 		list<string> func_str = kirt2str(*func);
 		res << func_str;
 	}
+
 	return res;
 }
 
@@ -161,7 +172,8 @@ list<string> kirt2str(const Function &func) {
 	// Forge the entry block
 	res.push_back("%entry:");
 	for (string &varid : varids) {
-		res.push_back("  " + varid + " = alloc i32");
+		if (!global_decl_map.count(varid))
+			res.push_back("  " + varid + " = alloc i32");
 	}
 	for (const FuncFParam &fparam : func.fparams) {
 		res.push_back("  store " + fparam.ident+"_param___, " + fparam.ident);

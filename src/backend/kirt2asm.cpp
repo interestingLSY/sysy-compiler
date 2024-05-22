@@ -16,23 +16,30 @@ using std::vector;
 
 enum class reg_alloc_stat_t {
 	REG,
-	STACK
+	STACK,
+	GLOBAL
 };
 
 // RegAllocStat - Register allocation result
 // If type == REG, then id is the register id
 // If type == STACK, then id is the stack offset (in bytes)
+// If type == GLOBAL, then ident is the global identifier (without the leading "@")
 struct RegAllocStat {
 	reg_alloc_stat_t type;
 	int id;
+	string ident;
 
 	string get_target_regid(bool is_rhs = false) {
 		// If type == REG, return the register id (e.g. "x12")
 		// If type == STACK, return t0
 		if (type == reg_alloc_stat_t::REG) {
 			return format("x%d", id);
-		} else {
+		} else if (type == reg_alloc_stat_t::GLOBAL) {
 			return is_rhs ? "t1" : "t0";
+		} else if (type == reg_alloc_stat_t::STACK) {
+			return is_rhs ? "t1" : "t0";
+		} else {
+			assert(0);
 		}
 	}
 
@@ -41,7 +48,18 @@ struct RegAllocStat {
 		// If type == STACK, return a list of instructions to load the value from the stack
 		if (type == reg_alloc_stat_t::REG) {
 			return {};
-		} else {
+		} else if (type == reg_alloc_stat_t::GLOBAL) {
+			return {
+				format(
+					"  la t2, %s",
+					ident.c_str()
+				),
+				format(
+					"  lw %s, 0(t2)",
+					is_rhs ? "t1" : "t0"
+				)
+			};
+		} else if (type == reg_alloc_stat_t::STACK) {
 			return {
 				format(
 					"  lw %s, %d(sp)",
@@ -49,6 +67,8 @@ struct RegAllocStat {
 					id
 				)
 			};
+		} else {
+			assert(0);
 		}
 	}
 
@@ -57,13 +77,25 @@ struct RegAllocStat {
 		// If type == STACK, return a list of instructions to store the value to the stack
 		if (type == reg_alloc_stat_t::REG) {
 			return {};
-		} else {
+		} else if (type == reg_alloc_stat_t::GLOBAL) {
+			return {
+				format(
+					"  la t2, %s",
+					ident.c_str()
+				),
+				format(
+					"  sw t0, 0(t2)"
+				)
+			};
+		} else if (type == reg_alloc_stat_t::STACK) {
 			return {
 				format(
 					"  sw t0, %d(sp)",
 					id
 				)
 			};
+		} else {
+			assert(0);
 		}
 	}
 };
@@ -118,10 +150,13 @@ public:
 	// Called when loading an identifer
 	RegAllocStat on_load(string ident) {
 		if (ident == "0") {
-			return {reg_alloc_stat_t::REG, 0};
+			return {reg_alloc_stat_t::REG, 0, ""};
+		}
+		if (KIRT::global_decl_map.count(ident)) {
+			return {reg_alloc_stat_t::GLOBAL, 0, ident.substr(1)};
 		}
 		if (!ident2stat.count(ident)) {
-			ident2stat[ident] = {reg_alloc_stat_t::STACK, stack_var_cnt*4};
+			ident2stat[ident] = {reg_alloc_stat_t::STACK, stack_var_cnt*4, ""};
 			stack_var_cnt += 1;
 		}
 		RegAllocStat stat = ident2stat[ident];
@@ -132,10 +167,13 @@ public:
 	// Called when storing an identifier
 	RegAllocStat on_store(string ident) {
 		if (ident == "0") {
-			return {reg_alloc_stat_t::REG, 0};
+			return {reg_alloc_stat_t::REG, 0, ""};
+		}
+		if (KIRT::global_decl_map.count(ident)) {
+			return {reg_alloc_stat_t::GLOBAL, 0, ident.substr(1)};
 		}
 		if (!ident2stat.count(ident)) {
-			ident2stat[ident] = {reg_alloc_stat_t::STACK, stack_var_cnt*4};
+			ident2stat[ident] = {reg_alloc_stat_t::STACK, stack_var_cnt*4, ""};
 			stack_var_cnt += 1;
 		}
 		RegAllocStat stat = ident2stat[ident];
@@ -183,8 +221,13 @@ static string kirt_exp_t2asm(KIRT::exp_t type) {
 	}
 }
 
+// const vector<string> callee_saved_regs({
+// 	"ra", "s0", "s1", "s2", "s3", "s4", "s5", "s6", "s7", "s8", "s9", "s10", "s11"
+// });
+
+// Currently we never modify s? registers, so we do not need to save & restore them
 const vector<string> callee_saved_regs({
-	"ra", "s0", "s1", "s2", "s3", "s4", "s5", "s6", "s7", "s8", "s9", "s10", "s11"
+	"ra"
 });
 
 // Some global status
@@ -205,6 +248,15 @@ pair<list<string>, string> kirt2asm(const KIRT::Exp &inst);
 list<string> kirt2asm(const KIRT::Program &prog) {
 	list<string> res;
 
+	res.push_back("  .data");
+	for (const std::shared_ptr<KIRT::GlobalDecl> &global_decl : prog.global_decls) {
+		res.push_back("  .globl " + global_decl->ident.substr(1));
+		res.push_back(global_decl->ident.substr(1) + ":");
+		res.push_back("  .zero 4");
+	}
+	res.push_back("");
+
+	res.push_back("  .text");
 	for (const std::shared_ptr<KIRT::Function> &func : prog.funcs) {
 		list<string> func_asm = kirt2asm(*func);
 		res << func_asm;
@@ -262,7 +314,6 @@ list<string> kirt2asm(const KIRT::Function &func) {
 	{
 		list<string> prolouge;
 		// Function declaration
-		prolouge.push_back("  .text");
 		prolouge.push_back("  .globl " + func.name);
 		prolouge.push_back(func.name + ":");
 

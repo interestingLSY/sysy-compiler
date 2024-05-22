@@ -57,7 +57,7 @@ int main(int argc, const char *argv[]) {
   assert(yyin);
   
   // Parse the AST
-  printf("Parsing AST...\n");
+  fprintf(stderr, "Parsing AST...\n");
   std::unique_ptr<AST::Base> ast;
   auto ret = yyparse(ast);
   assert(!ret);
@@ -67,14 +67,14 @@ int main(int argc, const char *argv[]) {
     ast->print();
   }
   
-  printf("Generating KIRT...\n");
+  fprintf(stderr, "Generating KIRT...\n");
   KIRT::Program kirt = KIRT::ast2kirt(*static_cast<AST::CompUnit *>(ast.get()));
 
-  printf("Running pass: replace unasmable instructions...\n");
+  fprintf(stderr, "Running pass: replace unasmable instructions...\n");
   KIRT::pass_repl_unasm(kirt);
 
   // Print KIR
-  printf("Converting KIRT to string...\n");
+  fprintf(stderr, "Converting KIRT to string...\n");
   std::list<std::string> strkir = KIRT::kirt2str(kirt);
   if (print_ir) {
     for (const std::string &line : strkir) {

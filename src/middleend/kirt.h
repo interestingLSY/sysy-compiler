@@ -200,13 +200,22 @@ public:
 };
 
 
+// GlobalDecl - A global variable declaration
+class GlobalDecl {
+public:
+	type_t type;
+	string ident;
+};
+
+
 // Program - The entire program
 class Program {
 public:
-	list<std::shared_ptr<Inst>> global_defs;
 	list<std::shared_ptr<Function>> funcs;
+	list<std::shared_ptr<GlobalDecl>> global_decls;
 };
 
 extern std::map<string, std::shared_ptr<Function>> func_map;
+extern std::map<string, std::shared_ptr<GlobalDecl>> global_decl_map;
 
 }

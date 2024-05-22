@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cassert>
 #include <map>
+#include <optional>
 #include <vector>
 
 #include "utils/utils.h"
@@ -173,12 +174,12 @@ exp_t ast_binary_exp_t2kirt_exp_r(AST::exp_t ast_type_t) {
 Counter block_id_counter;
 
 // Function declarations
-Program ast2kirt(AST::TopLevel &top_level);
-Function ast2kirt(AST::FuncDef &func_def);
+Function ast2kirt(AST::FuncDef &func_def, BlockList global_decl_blocks);
 BlockList ast2kirt(AST::Block &block);
 BlockList ast2kirt(AST::BlockItem &block_item);
 BlockList ast2kirt(AST::VarDef &var_def);
 pair<shared_ptr<Exp>, BlockList> ast2kirt(AST::Exp &exp);
+std::pair<shared_ptr<GlobalDecl>, BlockList> ast2kirt_global_decl(AST::VarDef &var_def);
 
 Program ast2kirt(AST::CompUnit &comp_unit) {
 	block_id_counter.reset();
@@ -201,31 +202,63 @@ Program ast2kirt(AST::CompUnit &comp_unit) {
 	register_library_function("starttime", {}, type_t::VOID);
 	register_library_function("stoptime", {}, type_t::VOID);
 
-	return ast2kirt(*comp_unit.top_level);
-}
+	vector<AST::VarDef*> global_decls;
+	vector<AST::FuncDef*> funcs;
+	std::unique_ptr<AST::TopLevel>* cur_item = &comp_unit.top_level;
+	while (cur_item->get()) {
+		if (is_instance_of((*cur_item)->def.get(), AST::VarDef*)) {
+			AST::VarDef* cur_var_def = dynamic_cast<AST::VarDef *>((*cur_item)->def.get());
+			while (cur_var_def) {
+				global_decls.push_back(cur_var_def);
+				cur_var_def = cur_var_def->recur.get();
+			}
+		} else if (is_instance_of((*cur_item)->def.get(), AST::FuncDef*)) {
+			funcs.push_back(dynamic_cast<AST::FuncDef *>((*cur_item)->def.get()));
+		} else {
+			assert(0);
+		}
+		cur_item = &(*cur_item)->recur;
+	}
 
-Program ast2kirt(AST::TopLevel &top_level) {
 	Program program;
-	if (is_instance_of(top_level.def.get(), AST::FuncDef*)) {
-		Function func = ast2kirt(*dynamic_cast<AST::FuncDef *>(top_level.def.get()));
+
+	BlockList global_decl_blocks = get_unit_blocklist();
+	for (AST::VarDef *var_def : global_decls) {
+		auto [global_decl, blocklist] = ast2kirt_global_decl(*var_def);
+		program.global_decls.push_back(global_decl);
+		blocklist.blocks.front()->name = "global_" + global_decl->ident.substr(1) + "_init";
+		global_decl_blocks.blocks.back()->term_inst = get_jump_inst(blocklist.blocks.front());
+		global_decl_blocks.blocks << blocklist.blocks;
+		KIRT::global_decl_map[global_decl->ident] = global_decl;
+	}
+
+	for (AST::FuncDef *func_def : funcs) {
+		Function func = ast2kirt(*func_def, global_decl_blocks);
 		shared_ptr<Function> func_ptr = std::make_shared<Function>(func);
 		program.funcs.emplace_back(func_ptr);
 		KIRT::func_map[func.name] = func_ptr;
-	} else {
-		// NOTE def may be a declaration of const/var, will be implemented in the future
-		assert(0);
 	}
-
-	if (top_level.recur) {
-		Program sub_program = ast2kirt(*top_level.recur);
-		program.funcs << sub_program.funcs;
-		program.global_defs << sub_program.global_defs;
-	}
-
+	
 	return program;
 }
 
-Function ast2kirt(AST::FuncDef &func_def) {
+std::pair<shared_ptr<GlobalDecl>, BlockList> ast2kirt_global_decl(AST::VarDef &var_def) {
+	reg_scope_renamer.on_define_var(var_def.ident);
+	shared_ptr<GlobalDecl> global_decl = std::make_shared<GlobalDecl>();
+	global_decl->type = KIRT::type_t::INT;	// TODO Support array
+	global_decl->ident = reg_scope_renamer(var_def.ident);
+	if (var_def.init_val) {
+		auto [init_val_exp, init_val_blocks] = ast2kirt(*var_def.init_val);
+		shared_ptr<AssignInst> assign_inst = std::make_shared<AssignInst>();
+		assign_inst->ident = global_decl->ident;
+		assign_inst->exp = *init_val_exp;
+		init_val_blocks.blocks.back()->insts.push_back(assign_inst);
+		return {global_decl, init_val_blocks};
+	}
+	return {global_decl, get_unit_blocklist()};
+}
+
+Function ast2kirt(AST::FuncDef &func_def, BlockList global_decl_blocks) {
 	reg_scope_renamer.on_enter_scope();
 
 	Function func;
@@ -244,7 +277,15 @@ Function ast2kirt(AST::FuncDef &func_def) {
 	}
 
 	func.blocks = ast2kirt(*func_def.block);
-	func.blocks.blocks.front()->name = "real_entry";	// The `entry` block performs some initialization, and "real_entry" is the real entry	
+	if (func.name != "main") {
+		func.blocks.blocks.front()->name = "real_entry";	// The `entry` block performs some initialization, and "real_entry" is the real entry	
+	} else {
+		// Perform global variable initialization
+		func.blocks.blocks.front()->name = "real_entry2";
+		global_decl_blocks.blocks.front()->name = "real_entry";
+		fill_in_empty_terminst_target(global_decl_blocks, func.blocks.blocks.front());
+		global_decl_blocks.blocks >> func.blocks.blocks;
+	}
 	
 	// Construct the epilogue block
 	shared_ptr<ReturnInst> epilogue_block_ret_inst = std::make_shared<ReturnInst>();
