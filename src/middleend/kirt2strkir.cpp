@@ -81,6 +81,9 @@ std::vector<string> get_all_varid(const Function &func) {
 			collect_varids_in_exp(*exp.rhs);
 		}
 	};
+	for (const FuncFParam &func_fparam : func.fparams) {
+		res.push_back(func_fparam.ident);
+	}
 	for (const std::shared_ptr<Block> &block : func.blocks.blocks) {
 		for (const shared_ptr<Inst> &inst : block->insts) {
 			if (const AssignInst *assign_inst = dynamic_cast<AssignInst*>(inst.get())) {
