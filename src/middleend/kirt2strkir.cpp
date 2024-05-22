@@ -85,6 +85,7 @@ std::vector<string> get_all_varid(const Function &func) {
 		for (const shared_ptr<Inst> &inst : block->insts) {
 			if (const AssignInst *assign_inst = dynamic_cast<AssignInst*>(inst.get())) {
 				res.push_back(assign_inst->ident);
+				collect_varids_in_exp(assign_inst->exp);
 			} else if (const ExpInst *exp_inst = dynamic_cast<ExpInst*>(inst.get())) {
 				collect_varids_in_exp(exp_inst->exp);
 			} else {
