@@ -143,6 +143,7 @@ public:
 	void print(int depth) const;
 };
 
+// Abstract class for all statements
 class Stmt : public Base {
 };
 

@@ -42,7 +42,6 @@ public:
 
 	// Called when defining a new variable
 	void on_define_var(string orig_name) {
-		// printf("on_define_var: %s at %d\n", orig_name.c_str(), cur_lvl);
 		if (!orig_name2defined_at_lvls[orig_name].empty() &&
 			orig_name2defined_at_lvls[orig_name].back() == cur_lvl) {
 			printf("Variable %s redefined at level %d\n", orig_name.c_str(), cur_lvl);
@@ -53,10 +52,8 @@ public:
 
 	// Rename a variable
 	string operator()(string orig_name) {
-		// printf("Attempting to rename %s\n", orig_name.c_str());
 		assert (orig_name2defined_at_lvls.count(orig_name) != 0);
 		int target_lvl = orig_name2defined_at_lvls[orig_name].back();
-		// printf("rename: %s to %d\n", orig_name.c_str(), target_lvl);
 		return "@" + orig_name + "_lv" + std::to_string(target_lvl);
 	}
 } reg_scope_renamer;
@@ -139,7 +136,7 @@ type_t ast_type_t2kirt_type_t(AST::type_t ast_type_t) {
 }
 
 // Convert a binary AST::exp_t to KIRT::exp_t
-exp_t ast_binary_exp_t2kirt_exp_r(AST::exp_t ast_type_t) {
+exp_t ast_binary_exp_t2kirt_exp_t(AST::exp_t ast_type_t) {
 	assert (AST::is_exp_t_binary(ast_type_t));
 	switch (ast_type_t) {
 		case AST::exp_t::ADD:
@@ -222,12 +219,13 @@ Program ast2kirt(AST::CompUnit &comp_unit) {
 
 	Program program;
 
+	// Get blocklists for initializing global variables
+	// There blocks will be inserted before `main()`
 	BlockList global_decl_blocks = get_unit_blocklist();
 	for (AST::VarDef *var_def : global_decls) {
 		auto [global_decl, blocklist] = ast2kirt_global_decl(*var_def);
 		program.global_decls.push_back(global_decl);
-		blocklist.blocks.front()->name = "global_" + global_decl->ident.substr(1) + "_init";
-		global_decl_blocks.blocks.back()->term_inst = get_jump_inst(blocklist.blocks.front());
+		fill_in_empty_terminst_target(global_decl_blocks, blocklist.blocks.front());
 		global_decl_blocks.blocks << blocklist.blocks;
 		KIRT::global_decl_map[global_decl->ident] = global_decl;
 	}
@@ -242,6 +240,10 @@ Program ast2kirt(AST::CompUnit &comp_unit) {
 	return program;
 }
 
+// Convert a global variable declaration to KIRT
+// Return (global_decl, blocklist)
+// The blocklist contains zero or one assignment instruction, depending on
+// whether the variable is initialized
 std::pair<shared_ptr<GlobalDecl>, BlockList> ast2kirt_global_decl(AST::VarDef &var_def) {
 	reg_scope_renamer.on_define_var(var_def.ident);
 	shared_ptr<GlobalDecl> global_decl = std::make_shared<GlobalDecl>();
@@ -249,13 +251,21 @@ std::pair<shared_ptr<GlobalDecl>, BlockList> ast2kirt_global_decl(AST::VarDef &v
 	global_decl->ident = reg_scope_renamer(var_def.ident);
 	if (var_def.init_val) {
 		auto [init_val_exp, init_val_blocks] = ast2kirt(*var_def.init_val);
-		shared_ptr<AssignInst> assign_inst = std::make_shared<AssignInst>();
-		assign_inst->ident = global_decl->ident;
-		assign_inst->exp = *init_val_exp;
-		init_val_blocks.blocks.back()->insts.push_back(assign_inst);
+		init_val_blocks.blocks.front()->name = "init_" + global_decl->ident.substr(1);
+
+		shared_ptr<AssignInst> assign_inst = get_assign_inst(global_decl->ident, *init_val_exp);
+		shared_ptr<Block> assign_block = get_unit_block();
+		assign_block->name = "init_assign_" + global_decl->ident.substr(1);
+		assign_block->insts.push_back(assign_inst);
+
+		fill_in_empty_terminst_target(init_val_blocks, assign_block);
+		init_val_blocks.blocks.push_back(assign_block);
 		return {global_decl, init_val_blocks};
+	} else {
+		BlockList placeholder_blocklist = get_unit_blocklist();
+		placeholder_blocklist.blocks.front()->name = "init_" + global_decl->ident.substr(1);
+		return {global_decl, placeholder_blocklist};
 	}
-	return {global_decl, get_unit_blocklist()};
 }
 
 Function ast2kirt(AST::FuncDef &func_def, BlockList global_decl_blocks) {
@@ -386,16 +396,20 @@ BlockList ast2kirt(AST::BlockItem &block_item) {
 
 		if (is_instance_of(cur_item, AST::AssignStmt*)) {
 			AST::AssignStmt *assign_stmt = dynamic_cast<AST::AssignStmt *>(cur_item);
-			shared_ptr<AssignInst> assign_inst = std::make_shared<AssignInst>();
-			assign_inst->ident = reg_scope_renamer(assign_stmt->lval->ident);
 			auto [exp, exp_blocks] = ast2kirt(*assign_stmt->exp);
-			assign_inst->exp = *exp;
 
-			exp_blocks.blocks.back()->insts.push_back(assign_inst);	// the last block of exp_blocks is the exit block
+			shared_ptr<AssignInst> assign_inst = get_assign_inst(reg_scope_renamer(assign_stmt->lval->ident), *exp);
+			shared_ptr<Block> assign_inst_block = get_unit_block();
+			assign_inst_block->insts.push_back(assign_inst);
+			assign_inst_block->name = "assign_" + std::to_string(block_id_counter.next());
 
 			BlockList following_blocks = block_item.recur ? ast2kirt(*block_item.recur) : get_unit_blocklist();
 			following_blocks.blocks.front()->name = "aassign_" + std::to_string(block_id_counter.next());
-			exp_blocks.blocks.back()->term_inst = get_jump_inst(following_blocks.blocks.front());
+
+			exp_blocks.blocks.back()->term_inst = get_jump_inst(assign_inst_block);
+			assign_inst_block->term_inst = get_jump_inst(following_blocks.blocks.front());
+
+			exp_blocks.blocks.push_back(assign_inst_block);
 			exp_blocks.blocks << following_blocks.blocks;
 			return exp_blocks;
 		}
@@ -541,6 +555,7 @@ pair<shared_ptr<Exp>, BlockList> ast2kirt(AST::Exp &exp) {
 			kirt_exp->ident = reg_scope_renamer(exp.lval.get()->ident);
 			return {kirt_exp, get_unit_blocklist()};
 		} case AST::exp_t::FUNC_CALL: {
+			int func_call_id = block_id_counter.next();
 			shared_ptr<Exp> kirt_exp = std::make_shared<Exp>();
 			kirt_exp->type = exp_t::FUNC_CALL;
 			kirt_exp->ident = exp.func_name;
@@ -555,7 +570,7 @@ pair<shared_ptr<Exp>, BlockList> ast2kirt(AST::Exp &exp) {
 					"func_%s_rparam_%d_%d",
 					exp.func_name.c_str(),
 					cur_rparam_id,
-					block_id_counter.next()
+					func_call_id
 				);
 				
 				kirt_exp->args.push_back(rparam_exp);
@@ -660,7 +675,7 @@ pair<shared_ptr<Exp>, BlockList> ast2kirt(AST::Exp &exp) {
 		default: {
 			// These exp_t can be easily converted to exp_t in KIRT by a simple one-to-one mapping
 			shared_ptr<Exp> kirt_exp = std::make_shared<Exp>();
-			kirt_exp->type = ast_binary_exp_t2kirt_exp_r(exp.type);
+			kirt_exp->type = ast_binary_exp_t2kirt_exp_t(exp.type);
 			auto [lhs_exp, lhs_exp_blocks] = ast2kirt(*exp.lhs);
 			auto [rhs_exp, rhs_exp_blocks] = ast2kirt(*exp.rhs);
 			kirt_exp->lhs = lhs_exp;
