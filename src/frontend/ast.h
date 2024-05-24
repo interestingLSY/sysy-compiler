@@ -100,6 +100,7 @@ class VarDef : public Base {
 public:
 	std::string ident;
 	std::unique_ptr<Exp> init_val;
+	bool is_const;	// True if it is a constant (defined with `const`)
 	std::unique_ptr<VarDef> recur;
 
 	void print(int depth) const;

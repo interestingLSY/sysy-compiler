@@ -87,6 +87,9 @@ void TopLevel::print(int depth) const {
 void VarDef::print(int depth) const {
     cout << indent(depth) << "VarDef {" << endl;
     cout << indent(depth + 1) << "ident: " << ident << endl;
+    if (is_const) {
+        cout << indent(depth + 1) << "constant" << endl;
+    }
     if (init_val) {
         init_val->print(depth + 1);
     }

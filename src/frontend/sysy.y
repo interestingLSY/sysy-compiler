@@ -109,9 +109,19 @@ TopLevelDef_
 VarDecl_
   : CONST Type VarDef ';' {
     $$ = $3;
+    AST::VarDef* cur_vardef = dynamic_cast<AST::VarDef*>($$);
+    while (cur_vardef) {
+      cur_vardef->is_const = true;
+      cur_vardef = cur_vardef->recur.get();
+    }
   }
   | Type VarDef ';' {
     $$ = $2;
+    AST::VarDef* cur_vardef = dynamic_cast<AST::VarDef*>($$);
+    while (cur_vardef) {
+      cur_vardef->is_const = false;
+      cur_vardef = cur_vardef->recur.get();
+    }
   }
 
 

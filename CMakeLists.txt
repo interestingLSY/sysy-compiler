@@ -1,9 +1,17 @@
 # Adapted from https://github.com/pku-minic/sysy-cmake-template/blob/master/CMakeLists.txt
 cmake_minimum_required(VERSION 3.13)
 project(compiler)
+set(CMAKE_CXX_STANDARD 20)
 
 add_compile_options(-Wall -Wno-register -Wno-format-security)
-set(CMAKE_CXX_STANDARD 20)
+
+# If env var "SANITIZE" is set, enable sanitizers
+if (DEFINED ENV{SANITIZE})
+	set(SANITIZE "$ENV{SANITIZE}")
+	message(STATUS "Sanitizers enabled: ${SANITIZE}")
+	add_compile_options(-fsanitize=${SANITIZE})
+	add_link_options(-fsanitize=${SANITIZE})
+endif()
 
 # options about libraries and includes
 set(LIB_DIR "$ENV{CDE_LIBRARY_PATH}/native" CACHE STRING "directory of libraries")
