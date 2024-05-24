@@ -12,14 +12,14 @@ namespace KIRT {
 
 using std::pair;
 
-// The register scope renamer
+// The variable scope renamer
 // With the introduction of scoping, variable from different scopes may have the same name
 // To avoid confusion, we rename the variables to a unique name:
 //	@<original_name>_lv<level>
 // Each time we enter a new scope, we increment the level. When we leave the
 // scope, we decrement the level.
 // TODO This renamer is inefficient. Redesign the algorithm
-class RegScopeRenamer {
+class VarScopeRenamer {
 private:
 	int cur_lvl = 0;	// Current level
 	std::map<std::string, std::vector<int>> orig_name2defined_at_lvls;
@@ -56,7 +56,7 @@ public:
 		int target_lvl = orig_name2defined_at_lvls[orig_name].back();
 		return "@" + orig_name + "_lv" + std::to_string(target_lvl);
 	}
-} reg_scope_renamer;
+} var_scope_renamer;
 
 // Generate a block with an empty JumpInst terminal instruction
 // This block is called as "unit block" since it behaves like a unit in the blocklist
@@ -245,10 +245,10 @@ Program ast2kirt(AST::CompUnit &comp_unit) {
 // The blocklist contains zero or one assignment instruction, depending on
 // whether the variable is initialized
 std::pair<shared_ptr<GlobalDecl>, BlockList> ast2kirt_global_decl(AST::VarDef &var_def) {
-	reg_scope_renamer.on_define_var(var_def.ident);
+	var_scope_renamer.on_define_var(var_def.ident);
 	shared_ptr<GlobalDecl> global_decl = std::make_shared<GlobalDecl>();
 	global_decl->type = KIRT::type_t::INT;	// TODO Support array
-	global_decl->ident = reg_scope_renamer(var_def.ident);
+	global_decl->ident = var_scope_renamer(var_def.ident);
 	if (var_def.init_val) {
 		auto [init_val_exp, init_val_blocks] = ast2kirt(*var_def.init_val);
 		init_val_blocks.blocks.front()->name = "init_" + global_decl->ident.substr(1);
@@ -269,7 +269,7 @@ std::pair<shared_ptr<GlobalDecl>, BlockList> ast2kirt_global_decl(AST::VarDef &v
 }
 
 Function ast2kirt(AST::FuncDef &func_def, BlockList global_decl_blocks) {
-	reg_scope_renamer.on_enter_scope();
+	var_scope_renamer.on_enter_scope();
 
 	Function func;
 	func.ret_type = ast_type_t2kirt_type_t(func_def.ret_type);
@@ -278,10 +278,10 @@ Function ast2kirt(AST::FuncDef &func_def, BlockList global_decl_blocks) {
 	std::unique_ptr<AST::FuncFParam>* cur_fparam = &func_def.fparam;
 	while (cur_fparam->get()) {
 		AST::FuncFParam *fparam = cur_fparam->get();
-		reg_scope_renamer.on_define_var(fparam->ident);
+		var_scope_renamer.on_define_var(fparam->ident);
 		func.fparams.push_back(FuncFParam {
 			ast_type_t2kirt_type_t(fparam->type),
-			reg_scope_renamer(fparam->ident)
+			var_scope_renamer(fparam->ident)
 		});
 		cur_fparam = &(cur_fparam->get()->recur);
 	}
@@ -316,15 +316,15 @@ Function ast2kirt(AST::FuncDef &func_def, BlockList global_decl_blocks) {
 	fill_in_empty_terminst_target(func.blocks, epilogue_block);
 	func.blocks.blocks.push_back(epilogue_block);
 
-	reg_scope_renamer.on_exit_scope();
+	var_scope_renamer.on_exit_scope();
 
 	return func;
 }
 
 BlockList ast2kirt(AST::Block &block) {
-	reg_scope_renamer.on_enter_scope();
+	var_scope_renamer.on_enter_scope();
 	auto result = ast2kirt(*block.item);
-	reg_scope_renamer.on_exit_scope();
+	var_scope_renamer.on_exit_scope();
 	return result;
 }
 
@@ -398,7 +398,7 @@ BlockList ast2kirt(AST::BlockItem &block_item) {
 			AST::AssignStmt *assign_stmt = dynamic_cast<AST::AssignStmt *>(cur_item);
 			auto [exp, exp_blocks] = ast2kirt(*assign_stmt->exp);
 
-			shared_ptr<AssignInst> assign_inst = get_assign_inst(reg_scope_renamer(assign_stmt->lval->ident), *exp);
+			shared_ptr<AssignInst> assign_inst = get_assign_inst(var_scope_renamer(assign_stmt->lval->ident), *exp);
 			shared_ptr<Block> assign_inst_block = get_unit_block();
 			assign_inst_block->insts.push_back(assign_inst);
 			assign_inst_block->name = "assign_" + std::to_string(block_id_counter.next());
@@ -440,9 +440,9 @@ BlockList ast2kirt(AST::BlockItem &block_item) {
 		auto ast2kirt_stmt_or_block = [&](std::unique_ptr<AST::Base> &stmt_or_block) -> BlockList {
 			// A helper function for converting a statement or block to a block list
 			// Useful in if() and while()
-			reg_scope_renamer.on_enter_scope();
+			var_scope_renamer.on_enter_scope();
 			BlockList block_list = ast2kirt(*dynamic_cast<AST::BlockItem *>(stmt_or_block.get()));
-			reg_scope_renamer.on_exit_scope();
+			var_scope_renamer.on_exit_scope();
 			return block_list;
 		};
 		if (is_instance_of(cur_item, AST::IfStmt*)) {
@@ -520,7 +520,7 @@ BlockList ast2kirt(AST::BlockItem &block_item) {
 }
 
 BlockList ast2kirt(AST::VarDef &var_def) {
-	reg_scope_renamer.on_define_var(var_def.ident);
+	var_scope_renamer.on_define_var(var_def.ident);
 	BlockList assign_insts = get_unit_blocklist();
 	if (var_def.init_val) {
 		// Forge a virtual assignment statement
@@ -552,7 +552,7 @@ pair<shared_ptr<Exp>, BlockList> ast2kirt(AST::Exp &exp) {
 		} case AST::exp_t::LVAL: {
 			shared_ptr<Exp> kirt_exp = std::make_shared<Exp>();
 			kirt_exp->type = exp_t::LVAL;
-			kirt_exp->ident = reg_scope_renamer(exp.lval.get()->ident);
+			kirt_exp->ident = var_scope_renamer(exp.lval.get()->ident);
 			return {kirt_exp, get_unit_blocklist()};
 		} case AST::exp_t::FUNC_CALL: {
 			int func_call_id = block_id_counter.next();
