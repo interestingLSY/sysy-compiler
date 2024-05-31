@@ -2,8 +2,11 @@
 
 #include <algorithm>
 #include <cassert>
+#include <cstdio>
 #include <functional>
+#include <iostream>
 #include <memory>
+#include <unordered_set>
 #include <vector>
 
 #include "utils/utils.h"
@@ -12,17 +15,10 @@ namespace KIRT {
 
 Counter temp_reg_cnter;
 
-static string kirt_type_t2str(type_t type) {
-	switch (type) {
-		case type_t::INT:
-			return "i32";
-		default:
-			assert(0);
-	}
-}
-
 static string kirt_exp_t2str(exp_t type) {
 	switch (type) {
+		case exp_t::ADDR_ADD:
+			return "getptr";
 		case exp_t::ADD:
 			return "add";
 		case exp_t::SUB:
@@ -64,49 +60,7 @@ static string kirt_exp_t2str(exp_t type) {
 	}
 }
 
-std::vector<string> get_all_varid(const Function &func) {
-	std::vector<string> res;
-	std::function<void(const Exp &exp)> collect_varids_in_exp = [&](const Exp &exp) {
-		if (exp.type == exp_t::NUMBER) {
-		} else if (exp.type == exp_t::LVAL) {
-			res.push_back(exp.ident);
-		} else if (exp.type == exp_t::EQ0 || exp.type == exp_t::NEQ0) {
-			collect_varids_in_exp(*exp.lhs);
-		} else if (exp.type == exp_t::FUNC_CALL) {
-			for (const shared_ptr<Exp> &arg : exp.args) {
-				collect_varids_in_exp(*arg);
-			}
-		} else {
-			collect_varids_in_exp(*exp.lhs);
-			collect_varids_in_exp(*exp.rhs);
-		}
-	};
-	for (const FuncFParam &func_fparam : func.fparams) {
-		res.push_back(func_fparam.ident);
-	}
-	for (const std::shared_ptr<Block> &block : func.blocks.blocks) {
-		for (const shared_ptr<Inst> &inst : block->insts) {
-			if (const AssignInst *assign_inst = dynamic_cast<AssignInst*>(inst.get())) {
-				res.push_back(assign_inst->ident);
-				collect_varids_in_exp(assign_inst->exp);
-			} else if (const ExpInst *exp_inst = dynamic_cast<ExpInst*>(inst.get())) {
-				collect_varids_in_exp(exp_inst->exp);
-			} else {
-				assert(0);
-			}
-		}
-		if (const ReturnInst *return_inst = dynamic_cast<ReturnInst*>(block->term_inst.get())) {
-			if (return_inst->ret_exp)
-				collect_varids_in_exp(*return_inst->ret_exp);
-		}
-	}
-	std::sort(res.begin(), res.end());
-	res.resize(std::unique(res.begin(), res.end()) - res.begin());
-	return res;
-}
-
-
-list<string> kirt2str(const Function &func);
+list<string> kirt2str(const Function &func, const list<string> &load_global_arr_addr_prologue);
 list<string> kirt2str(const BlockList &assembling_blocks);
 list<string> kirt2str(const Block &block);
 list<string> kirt2str(const std::shared_ptr<TermInst> &term_inst);
@@ -117,6 +71,18 @@ list<string> kirt2str(const std::shared_ptr<Inst> &inst);
 list<string> kirt2str(const AssignInst &assign_inst);
 list<string> kirt2str(const ExpInst &exp_inst);
 pair<list<string>, string> kirt2str(const Exp &exp);
+
+// All Arrays Are Pointers Rule:
+// 
+// For convenience, all arrays in the generated Koopa IR are pointers. When loading
+// or storing an element, we use `getptr` followed by `load` or `store`. When
+// calculating the address of an element, we use `getptr` as well.
+// 
+// To achieve this:
+// - When allocating an array, we first allocate its underlying array, then use
+//   `getelemptr` to get the pointer to the first element. This applies for both
+//   global and local arrays.
+// - When passing arguments to a function, we pass the pointer (*i32).
 
 list<string> kirt2str(const Program &program) {
 	list<string> res;
@@ -134,37 +100,79 @@ list<string> kirt2str(const Program &program) {
 	});
 
 	// Global variable declarations
+	list<string> load_global_arr_addr_prologue;
 	for (const shared_ptr<GlobalDecl> &global_decl : program.global_decls) {
-		string command = format(
-			"global %s = alloc %s, zeroinit",
-			global_decl->ident.c_str(),
-			"i32"	// TODO support array type
-		);
-		res.push_back(command);
+		if (global_decl->type.is_int()) {
+			string command = format(
+				"global %s = alloc i32, %d",
+				global_decl->ident.c_str(),
+				global_decl->init_val
+			);
+			res.push_back(command);
+		} else if (global_decl->type.is_arr()) {
+			assert(global_decl->type.dims() == 1);
+			string init_list_str = "{";
+			for (int i = 0; i < global_decl->arr_init_vals.size(); i++) {
+				init_list_str += std::to_string(global_decl->arr_init_vals[i]);
+				if (i + 1 < global_decl->arr_init_vals.size())
+					init_list_str += ", ";
+			}
+			init_list_str += "}";
+			string command = format(
+				"global %s_underlying_arr = alloc [i32, %d], %s",
+				global_decl->ident.c_str(),
+				global_decl->type.numel(),
+				init_list_str.c_str()
+			);
+			res.push_back(command);
+			command = format(
+				"  %s = getelemptr %s_underlying_arr, 0",
+				global_decl->ident.c_str(),
+				global_decl->ident.c_str()
+			);
+			load_global_arr_addr_prologue.push_back(command);
+		} else {
+			assert(0);
+		}
 	}
 	res.push_back("");
 
 	// Function definitions
 	for (const shared_ptr<Function> &func : program.funcs) {
-		list<string> func_str = kirt2str(*func);
+		list<string> func_str = kirt2str(*func, load_global_arr_addr_prologue);
 		res << func_str;
 	}
 
 	return res;
 }
 
-list<string> kirt2str(const Function &func) {
-	vector<string> varids = get_all_varid(func);
+list<string> kirt2str(const Function &func, const list<string> &load_global_arr_addr_prologue) {
 	temp_reg_cnter.reset();	// Clear the register counter
 
 	list<string> res;
 
-	// Forge the function definition line
+	// Forge the function definition line and variable-loading lines
+	list<string> store_var_lines;
 	string func_def_line = "fun @" + func.name + "(";
 	for (const FuncFParam &fparam : func.fparams) {
 		if (func_def_line.back() != '(')
 			func_def_line += ", ";
-		func_def_line += fparam.ident+"_param___" + ": " + kirt_type_t2str(fparam.type);
+		if (fparam.type.is_int()) {
+			func_def_line += fparam.ident + "_param___" + ": i32";
+			store_var_lines.push_back(format(
+				"  %s = alloc i32",
+				fparam.ident.c_str()
+			));
+			store_var_lines.push_back(format(
+				"  store %s_param___, %s",
+				fparam.ident.c_str(),
+				fparam.ident.c_str()
+			));
+		} else if (fparam.type.is_arr()) {
+			func_def_line += fparam.ident + ": *i32";
+		} else {
+			assert(0);
+		}
 	}
 	if (func_def_line.back() == ' ' && func_def_line[func_def_line.size() - 2] == ',') {
 		func_def_line.pop_back();
@@ -172,20 +180,40 @@ list<string> kirt2str(const Function &func) {
 	}
 	func_def_line += ")";
 	if (func.ret_type != type_t::VOID) {
-		func_def_line += ": " + kirt_type_t2str(func.ret_type);
+		func_def_line += ": i32";	// Return type can only be int
 	}
 	func_def_line += " {";
 	res.push_back(func_def_line);
 
 	// Forge the entry block
 	res.push_back("%entry:");
-	for (string &varid : varids) {
-		if (!global_decl_map.count(varid))
-			res.push_back("  " + varid + " = alloc i32");
+
+	// Load the global array addresses
+	res <= load_global_arr_addr_prologue;
+
+	// Allocate space for all local variables (besides global vars and function params)
+	for (const FuncLocalVar &local_var : func.local_vars) {
+		if (local_var.type.is_int()) {
+			res.push_back("  " + local_var.ident + " = alloc i32");
+		} else if (local_var.type.is_arr()) {
+			assert(local_var.type.dims() == 1);
+			res.push_back(format(
+				"  %s_underlying_arr = alloc [i32, %d]",
+				local_var.ident.c_str(),
+				local_var.type.numel()
+			));
+			res.push_back(format(
+				"  %s = getelemptr %s_underlying_arr, 0",
+				local_var.ident.c_str(),
+				local_var.ident.c_str()
+			));
+		} else {
+			assert(0);
+		}
 	}
-	for (const FuncFParam &fparam : func.fparams) {
-		res.push_back("  store " + fparam.ident+"_param___, " + fparam.ident);
-	}
+
+	// Insert all "store variable" lines
+	res << store_var_lines;
 	res.push_back("  jump %real_entry");
 
 	list<string> blocks_str = kirt2str(func.blocks);
@@ -271,16 +299,40 @@ list<string> kirt2str(const std::shared_ptr<Inst> &inst) {
 	} else if (const ExpInst *exp_inst = dynamic_cast<ExpInst*>(inst.get())) {
 		return kirt2str(*exp_inst);
 	} else {
-		assert(0);
+		my_assert(26, false);
 	}
 }
 
-list<string> kirt2str(const AssignInst &AssignInst) {
+list<string> kirt2str(const AssignInst &assign_inst) {
 	list<string> res;
-	auto [exp_inst_list, exp_coid] = kirt2str(AssignInst.exp);
+	auto [exp_inst_list, exp_coid] = kirt2str(assign_inst.exp);
 	res << exp_inst_list;
-	// AssignInst.ident must be a variable name
-	res.push_back(format("  store %s, %s", exp_coid.c_str(), AssignInst.ident.c_str()));
+	if (assign_inst.lval.is_int()) {
+		res.push_back(format(
+			"  store %s, %s",
+			exp_coid.c_str(),
+			assign_inst.lval.ident.c_str())
+		);
+	} else if (assign_inst.lval.is_arr()) {
+		// The arrary must be collapsed to a single dimension
+		my_assert(27, assign_inst.lval.indices.size() == 1);
+		auto [lval_exp_inst_list, lval_exp_coid] = kirt2str(*assign_inst.lval.indices[0]);
+		res << lval_exp_inst_list;
+		int ptr_id = temp_reg_cnter.next();
+		res.push_back(format(
+			"  %%ptr_%d = getptr %s, %s",
+			ptr_id,
+			assign_inst.lval.ident.c_str(),
+			lval_exp_coid.c_str()
+		));
+		res.push_back(format(
+			"  store %s, %%ptr_%d",
+			exp_coid.c_str(),
+			ptr_id
+		));
+	} else {
+		my_assert(28, false);
+	}
 	return res;
 }
 
@@ -296,11 +348,37 @@ pair<list<string>, string> kirt2str(const Exp &exp) {
 		return { {}, std::to_string(exp.number) };
 	} else if (exp.type == exp_t::LVAL) {
 		string res_coid = "%" + std::to_string(temp_reg_cnter.next());
-		string load_inst = format("  %s = load %s", res_coid.c_str(), exp.ident.c_str());
-		return { { load_inst }, res_coid };
+		list<string> load_insts;
+		if (exp.lval.is_int()) {
+			load_insts.push_back(format(
+				"  %s = load %s",
+				res_coid.c_str(),
+				exp.lval.ident.c_str()
+			));
+		} else if (exp.lval.is_arr()) {
+			// The arrary must be collapsed to a single dimension
+			my_assert(29, exp.lval.indices.size() == 1);
+			auto [lval_exp_inst_list, lval_exp_coid] = kirt2str(*exp.lval.indices[0]);
+			load_insts << lval_exp_inst_list;
+			int ptr_id = temp_reg_cnter.next();
+			load_insts.push_back(format(
+				"  %%ptr_%d = getptr %s, %s",
+				ptr_id,
+				exp.lval.ident.c_str(),
+				lval_exp_coid.c_str()
+			));
+			load_insts.push_back(format(
+				"  %s = load %%ptr_%d",
+				res_coid.c_str(),
+				ptr_id
+			));
+		} else {
+			my_assert(30, false);
+		}
+		return { load_insts, res_coid };
 	} else if (exp.type == exp_t::FUNC_CALL) {
-		assert(KIRT::func_map.count(exp.ident));
-		shared_ptr<Function> func = KIRT::func_map[exp.ident];
+		assert(KIRT::func_map.count(exp.func_name));
+		shared_ptr<Function> func = KIRT::func_map[exp.func_name];
 		list<string> res;
 
 		vector<string> args_coid;
@@ -320,7 +398,7 @@ pair<list<string>, string> kirt2str(const Exp &exp) {
 			assert(0);
 		}
 
-		call_inst += format("call @%s(", exp.ident.c_str());
+		call_inst += format("call @%s(", exp.func_name.c_str());
 		for (size_t i = 0; i < args_coid.size(); i++) {
 			call_inst += args_coid[i];
 			if (i + 1 < args_coid.size())
@@ -330,6 +408,8 @@ pair<list<string>, string> kirt2str(const Exp &exp) {
 		
 		res.push_back(call_inst);
 		return { res, res_coid };
+	} else if (exp.type == exp_t::ARR_ADDR) {
+		return {{}, exp.arr_name};
 	} else if (exp.type == exp_t::EQ0 || exp.type == exp_t::NEQ0) {
 		assert (exp.lhs);
 		auto [lhs_inst_list, lhs_coid] = kirt2str(*exp.lhs);

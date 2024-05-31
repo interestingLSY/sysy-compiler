@@ -1,4 +1,4 @@
-// Replace Unasm: Replace un-assembly instructions (i.e. LEQ/GEQ/EQ/NEQ for riscv)
+// Pass Replace Unasm: Replace un-assembly instructions (i.e. LEQ/GEQ/EQ/NEQ for riscv)
 // with other instructions
 
 #include "pass_repl_unasm.h"

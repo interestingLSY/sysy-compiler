@@ -9,6 +9,8 @@
 #include "middleend/ast2kirt.h"
 #include "middleend/kirt2strkir.h"
 #include "middleend/pass_repl_unasm.h"
+#include "middleend/pass_collapse_arr.h"
+#include "middleend/pass_fill_block_name.h"
 #include "backend/kirt2asm.h"
 
 extern FILE *yyin;
@@ -72,6 +74,12 @@ int main(int argc, const char *argv[]) {
 
   fprintf(stderr, "Running pass: replace unasmable instructions...\n");
   KIRT::pass_repl_unasm(kirt);
+
+  fprintf(stderr, "Running pass: collapse arrays...\n");
+  KIRT::pass_collapse_arr(kirt);
+
+  fprintf(stderr, "Running pass: fill block names...\n");
+  KIRT::pass_fill_block_name(kirt);
 
   // Print KIR
   fprintf(stderr, "Converting KIRT to string...\n");

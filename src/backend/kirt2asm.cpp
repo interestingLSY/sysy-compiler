@@ -14,29 +14,29 @@ using std::string;
 using std::shared_ptr;
 using std::vector;
 
-enum class reg_alloc_stat_t {
+enum class var_loc_t {
 	REG,
 	STACK,
 	GLOBAL
 };
 
-// RegAllocStat - Register allocation result
+// VarLocation - Register allocation status
 // If type == REG, then id is the register id
 // If type == STACK, then id is the stack offset (in bytes)
 // If type == GLOBAL, then ident is the global identifier (without the leading "@")
-struct RegAllocStat {
-	reg_alloc_stat_t type;
+struct VarLocation {
+	var_loc_t loc;
 	int id;
 	string ident;
 
 	string get_target_regid(bool is_rhs = false) {
 		// If type == REG, return the register id (e.g. "x12")
 		// If type == STACK, return t0
-		if (type == reg_alloc_stat_t::REG) {
+		if (loc == var_loc_t::REG) {
 			return format("x%d", id);
-		} else if (type == reg_alloc_stat_t::GLOBAL) {
+		} else if (loc == var_loc_t::GLOBAL) {
 			return is_rhs ? "t1" : "t0";
-		} else if (type == reg_alloc_stat_t::STACK) {
+		} else if (loc == var_loc_t::STACK) {
 			return is_rhs ? "t1" : "t0";
 		} else {
 			assert(0);
@@ -46,9 +46,9 @@ struct RegAllocStat {
 	list<string> get_load_inst(bool is_rhs = false) {
 		// If type == REG, return an empty list
 		// If type == STACK, return a list of instructions to load the value from the stack
-		if (type == reg_alloc_stat_t::REG) {
+		if (loc == var_loc_t::REG) {
 			return {};
-		} else if (type == reg_alloc_stat_t::GLOBAL) {
+		} else if (loc == var_loc_t::GLOBAL) {
 			return {
 				format(
 					"  la t2, %s",
@@ -59,7 +59,7 @@ struct RegAllocStat {
 					is_rhs ? "t1" : "t0"
 				)
 			};
-		} else if (type == reg_alloc_stat_t::STACK) {
+		} else if (loc == var_loc_t::STACK) {
 			return {
 				format("  li t2, %d", id),
 				format("  add t2, sp, t2"),
@@ -76,9 +76,9 @@ struct RegAllocStat {
 	list<string> get_store_inst() {
 		// If type == REG, return an empty list
 		// If type == STACK, return a list of instructions to store the value to the stack
-		if (type == reg_alloc_stat_t::REG) {
+		if (loc == var_loc_t::REG) {
 			return {};
-		} else if (type == reg_alloc_stat_t::GLOBAL) {
+		} else if (loc == var_loc_t::GLOBAL) {
 			return {
 				format(
 					"  la t2, %s",
@@ -88,7 +88,7 @@ struct RegAllocStat {
 					"  sw t0, 0(t2)"
 				)
 			};
-		} else if (type == reg_alloc_stat_t::STACK) {
+		} else if (loc == var_loc_t::STACK) {
 			return {
 				format("  li t2, %d", id),
 				format("  add t2, sp, t2"),
@@ -103,12 +103,12 @@ struct RegAllocStat {
 	}
 };
 
-// RegAllocator - An on-the-fly register allocator
-class RegAllocator {
+// VarLocManager - An on-the-fly variable location manager
+class VarLocManager {
 public:
 	// std::vector<int> free_regids;
 	int stack_var_cnt;
-	std::map<string, RegAllocStat> ident2stat;
+	std::map<string, VarLocation> ident2stat;
 
 	// Called when entering a function
 	void on_enter_function() {
@@ -125,7 +125,7 @@ public:
 		// kth starts from 0
 		// `total_local_var_and_saved_regs` is (address of the 8th argument) - (final sp), in bytes
 		// Currently we save all function arguments to the stack
-		ident2stat[ident] = {reg_alloc_stat_t::STACK, stack_var_cnt*4};
+		ident2stat[ident] = {var_loc_t::STACK, stack_var_cnt*4};
 		stack_var_cnt += 1;
 		// Save the variable to the stack
 		if (kth <= 7) {
@@ -147,46 +147,46 @@ public:
 	}
 
 	// Called when loading an identifer
-	RegAllocStat on_load(string ident) {
+	VarLocation on_load(string ident) {
 		if (ident == "0") {
-			return {reg_alloc_stat_t::REG, 0, ""};
+			return {var_loc_t::REG, 0, ""};
 		}
 		if (KIRT::global_decl_map.count(ident)) {
-			return {reg_alloc_stat_t::GLOBAL, 0, ident.substr(1)};
+			return {var_loc_t::GLOBAL, 0, ident.substr(1)};
 		}
-		my_assert (ident2stat.count(ident), 9);
-		RegAllocStat stat = ident2stat[ident];
-		my_assert (stat.type == reg_alloc_stat_t::STACK, 11);
+		my_assert (9, ident2stat.count(ident));
+		VarLocation stat = ident2stat[ident];
+		my_assert (10, stat.loc == var_loc_t::STACK);
 		return stat;
 	}
 
 	// Called when storing an identifier
-	RegAllocStat on_store(string ident) {
+	VarLocation on_store(string ident) {
 		if (ident == "0") {
-			return {reg_alloc_stat_t::REG, 0, ""};
+			return {var_loc_t::REG, 0, ""};
 		}
 		if (KIRT::global_decl_map.count(ident)) {
-			return {reg_alloc_stat_t::GLOBAL, 0, ident.substr(1)};
+			return {var_loc_t::GLOBAL, 0, ident.substr(1)};
 		}
 		if (!ident2stat.count(ident)) {
 			int stack_offset = stack_var_cnt*4;
 			stack_var_cnt += 1;
-			ident2stat[ident] = {reg_alloc_stat_t::STACK, stack_offset, ""};
+			ident2stat[ident] = {var_loc_t::STACK, stack_offset, ""};
 		}
-		RegAllocStat stat = ident2stat[ident];
-		my_assert (stat.type == reg_alloc_stat_t::STACK, 12);
+		VarLocation stat = ident2stat[ident];
+		my_assert (12, stat.loc == var_loc_t::STACK);
 		return stat;
 	}
-} reg_allocator;
+} var_loc_manager;
 
 static string kirt_exp_t2asm(KIRT::exp_t type) {
 	switch (type) {
 		case KIRT::exp_t::NUMBER:
-			my_assert(0, 13);
+			my_assert(13, 0);
 		case KIRT::exp_t::LVAL:
-			my_assert(0, 14);
+			my_assert(14, 0);
 		case KIRT::exp_t::FUNC_CALL:
-			my_assert(0, 15);
+			my_assert(15, 0);
 		case KIRT::exp_t::ADD:
 			return "add";
 		case KIRT::exp_t::SUB:
@@ -214,7 +214,7 @@ static string kirt_exp_t2asm(KIRT::exp_t type) {
 		case KIRT::exp_t::SAR:
 			return "sra";
 		default:
-			my_assert(0, 16);
+			my_assert(16, 0);
 	}
 }
 
@@ -249,7 +249,15 @@ list<string> kirt2asm(const KIRT::Program &prog) {
 	for (const std::shared_ptr<KIRT::GlobalDecl> &global_decl : prog.global_decls) {
 		res.push_back("  .globl " + global_decl->ident.substr(1));
 		res.push_back(global_decl->ident.substr(1) + ":");
-		res.push_back("  .zero 4");
+		if (global_decl->type.is_int()) {
+			res.push_back("  .word " + std::to_string(global_decl->init_val));
+		} else if (global_decl->type.is_arr()) {
+			for (int i = 0; i < global_decl->arr_init_vals.size(); i++) {
+				res.push_back("  .word " + std::to_string(global_decl->arr_init_vals[i]));
+			}
+		} else {
+			my_assert(11, 0);
+		}
 	}
 	res.push_back("");
 
@@ -263,7 +271,7 @@ list<string> kirt2asm(const KIRT::Program &prog) {
 }
 
 list<string> kirt2asm(const KIRT::Function &func) {
-	reg_allocator.on_enter_function();
+	var_loc_manager.on_enter_function();
 	cur_func_name = func.name;
 
 	// Construct the epilogue
@@ -286,7 +294,7 @@ list<string> kirt2asm(const KIRT::Function &func) {
 	list<string> res;
 
 	int stack_frame_length;	// in 4 bytes, include local vars, but does not include saved regs
-	// stack_frame_length = reg_allocator.get_max_num_local_vars() + 1;	// +1 for the "stack frame length" (stored at 0(sp))
+	// stack_frame_length = var_loc_manager.get_max_num_local_vars() + 1;	// +1 for the "stack frame length" (stored at 0(sp))
 	stack_frame_length = 1000 + 1 + std::max(0, (int)func.fparams.size()-8);	// +1 for the "stack frame length" (stored at 0(sp))
 	if (stack_frame_length % 4 != 0) {
 		stack_frame_length += 4 - (stack_frame_length % 4);
@@ -296,7 +304,7 @@ list<string> kirt2asm(const KIRT::Function &func) {
 	int total_local_var_and_saved_regs = callee_saved_regs.size() + stack_frame_length;
 	for (int i = 0; i < func.fparams.size(); i++) {
 		const KIRT::FuncFParam &param = func.fparams[i];
-		list<string> save_arg_insts = reg_allocator.on_new_func_arg(param.ident, i, total_local_var_and_saved_regs);
+		list<string> save_arg_insts = var_loc_manager.on_new_func_arg(param.ident, i, total_local_var_and_saved_regs);
 		res << save_arg_insts;
 	}
 
@@ -305,7 +313,7 @@ list<string> kirt2asm(const KIRT::Function &func) {
 		res << block_asm;
 	}
 
-	my_assert (reg_allocator.get_max_num_local_vars() <= 1000, 17);
+	my_assert (17, var_loc_manager.get_max_num_local_vars() <= 1000);
 
 	// Construct the prologue
 	{
@@ -363,20 +371,27 @@ list<string> kirt2asm(const shared_ptr<KIRT::Inst> &inst) {
 		auto [exp_inst_list, exp_virt_ident] = kirt2asm(assign_inst->exp);
 		res << exp_inst_list;
 
-		RegAllocStat exp_alloc_stat = reg_allocator.on_load(exp_virt_ident);
+		VarLocation exp_alloc_stat = var_loc_manager.on_load(exp_virt_ident);
 		res <= exp_alloc_stat.get_load_inst();
-		RegAllocStat target_alloc_stat = reg_allocator.on_store(assign_inst->ident);
-		res.push_back(format(
-			"  mv %s, %s",
-			target_alloc_stat.get_target_regid().c_str(),
-			exp_alloc_stat.get_target_regid().c_str()
-		));
-		res <= target_alloc_stat.get_store_inst();
+
+		if (assign_inst->lval.is_int()) {
+			VarLocation target_alloc_stat = var_loc_manager.on_store(assign_inst->lval.ident);
+			res.push_back(format(
+				"  mv %s, %s",
+				target_alloc_stat.get_target_regid().c_str(),
+				exp_alloc_stat.get_target_regid().c_str()
+			));
+			res <= target_alloc_stat.get_store_inst();
+		} else if (assign_inst->lval.is_arr()) {
+			assert(0);
+		} else {
+			my_assert(18, 0);
+		}
 	} else if (const KIRT::ExpInst *exp_inst = dynamic_cast<const KIRT::ExpInst *>(inst.get())) {
 		auto [exp_inst_list, exp_virt_ident] = kirt2asm(exp_inst->exp);
 		res << exp_inst_list;
 	} else {
-		my_assert(0, 18);
+		my_assert(18, 0);
 	}
 	return res;
 }
@@ -389,7 +404,7 @@ list<string> kirt2asm(const shared_ptr<KIRT::TermInst> &inst) {
 			auto [exp_inst_list, exp_virt_ident] = kirt2asm(*ret_inst->ret_exp);
 			res << exp_inst_list;
 			
-			RegAllocStat exp_alloc_stat = reg_allocator.on_load(exp_virt_ident);
+			VarLocation exp_alloc_stat = var_loc_manager.on_load(exp_virt_ident);
 			res <= exp_alloc_stat.get_load_inst();
 			res.push_back(format(
 				"  mv a0, %s",
@@ -412,7 +427,7 @@ list<string> kirt2asm(const shared_ptr<KIRT::TermInst> &inst) {
 		// TODO Now we always jump to the false block, via `j %s`. In the future we may
 		// get rid of this jump via BlockReorderPass
 		// TODO Currently short-circuit is not supported
-		RegAllocStat cond_alloc_stat = reg_allocator.on_load(cond_virt_ident);
+		VarLocation cond_alloc_stat = var_loc_manager.on_load(cond_virt_ident);
 		res <= cond_alloc_stat.get_load_inst();
 		res.push_back(format(
 			"  bnez %s, %s",
@@ -424,7 +439,7 @@ list<string> kirt2asm(const shared_ptr<KIRT::TermInst> &inst) {
 			rename_block(branch_inst->false_block->name).c_str()
 		));
 	} else {
-		my_assert(0, 19);
+		my_assert(19, 0);
 	}
 
 	return res;
@@ -434,11 +449,12 @@ list<string> kirt2asm(const shared_ptr<KIRT::TermInst> &inst) {
 pair<list<string>, string> kirt2asm(const KIRT::Exp &exp) {
 	list<string> res;
 	if (exp.type == KIRT::exp_t::LVAL) {
-		string ident = exp.ident;
+		assert(0);
+		string ident = exp.lval.ident;
 		return {res, ident};
 	} else if (exp.type == KIRT::exp_t::FUNC_CALL) {
 		string res_virt_ident = format("v%d", virt_ident_counter.next());
-		RegAllocStat res_reg_alloc_stat = reg_allocator.on_store(res_virt_ident);
+		VarLocation res_reg_alloc_stat = var_loc_manager.on_store(res_virt_ident);
 
 		int num_args = exp.args.size();
 		vector<string> arg_virt_idents;
@@ -454,7 +470,7 @@ pair<list<string>, string> kirt2asm(const KIRT::Exp &exp) {
 			string arg_virt_ident = arg_virt_idents[i];
 			if (i <= 7) {
 				// Save the argument to the register
-				RegAllocStat arg_alloc_stat = reg_allocator.on_load(arg_virt_ident);
+				VarLocation arg_alloc_stat = var_loc_manager.on_load(arg_virt_ident);
 				res <= arg_alloc_stat.get_load_inst();
 				res.push_back(format(
 					"  mv a%d, %s",
@@ -463,7 +479,7 @@ pair<list<string>, string> kirt2asm(const KIRT::Exp &exp) {
 				));
 			} else {
 				// Save the argument to the stack
-				RegAllocStat arg_alloc_stat = reg_allocator.on_load(arg_virt_ident);
+				VarLocation arg_alloc_stat = var_loc_manager.on_load(arg_virt_ident);
 				res <= arg_alloc_stat.get_load_inst();
 				res.push_back(format(
 					"  sw %s, %d(sp)",
@@ -482,7 +498,7 @@ pair<list<string>, string> kirt2asm(const KIRT::Exp &exp) {
 		// Call
 		res.push_back(format(
 			"  call %s",
-			exp.ident.c_str()
+			exp.func_name.c_str()
 		));
 		// Restore SP
 		if (num_args > 8) {
@@ -500,7 +516,7 @@ pair<list<string>, string> kirt2asm(const KIRT::Exp &exp) {
 		return {res, res_virt_ident};
 	} else {
 		string res_virt_ident = format("v%d", virt_ident_counter.next());
-		RegAllocStat res_reg_alloc_stat = reg_allocator.on_store(res_virt_ident);
+		VarLocation res_reg_alloc_stat = var_loc_manager.on_store(res_virt_ident);
 		if (exp.type == KIRT::exp_t::NUMBER) {
 			if (exp.number != 0) {
 				res.push_back(format(
@@ -517,7 +533,7 @@ pair<list<string>, string> kirt2asm(const KIRT::Exp &exp) {
 			auto [lhs_inst_list, lhs_virt_ident] = kirt2asm(*exp.lhs);
 			res << lhs_inst_list;
 
-			RegAllocStat lhs_alloc_stat = reg_allocator.on_load(lhs_virt_ident);
+			VarLocation lhs_alloc_stat = var_loc_manager.on_load(lhs_virt_ident);
 			res <= lhs_alloc_stat.get_load_inst();
 			res.push_back(format(
 				"  %s %s, %s",
@@ -533,8 +549,8 @@ pair<list<string>, string> kirt2asm(const KIRT::Exp &exp) {
 			res << lhs_inst_list;
 			res << rhs_inst_list;
 
-			RegAllocStat lhs_alloc_stat = reg_allocator.on_load(lhs_virt_ident);
-			RegAllocStat rhs_alloc_stat = reg_allocator.on_load(rhs_virt_ident);
+			VarLocation lhs_alloc_stat = var_loc_manager.on_load(lhs_virt_ident);
+			VarLocation rhs_alloc_stat = var_loc_manager.on_load(rhs_virt_ident);
 			res <= lhs_alloc_stat.get_load_inst();
 			res <= rhs_alloc_stat.get_load_inst(true);
 			res.push_back(format(

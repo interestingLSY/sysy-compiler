@@ -1,11 +1,15 @@
 // kirt.h - Definition of KIR nodes
 #pragma once
 
+#include <cassert>
 #include <list>
 #include <memory>
+#include <numeric>
 #include <string>
 #include <vector>
 #include <map>
+
+#include "utils/utils.h"
 
 namespace KIRT {
 
@@ -14,9 +18,59 @@ using std::string;
 using std::shared_ptr;
 using std::vector;
 
+class Exp;
+
 enum class type_t {
 	INT,
+	ARR,
 	VOID
+};
+
+struct Type {
+	type_t type;
+	vector<int> shape;
+
+	inline bool is_int() const {
+		return type == type_t::INT;
+	}
+	inline bool is_arr() const {
+		return type == type_t::ARR;
+	}
+	inline int dims() const {
+		assert(type == type_t::ARR);
+		return shape.size();
+	}
+	inline int numel() const {
+		assert(type == type_t::ARR);
+		return std::accumulate(shape.begin(), shape.end(), 1, std::multiplies<int>());
+	}
+	inline int stride(int i) const {
+		assert(type == type_t::ARR);
+		assert(i < shape.size());
+		return std::accumulate(shape.begin() + i + 1, shape.end(), 1, std::multiplies<int>());
+	}
+};
+
+struct LVal {
+	string ident;
+	Type type;
+	vector<shared_ptr<Exp>> indices;
+	// When indices.size() == shape.size(), the result should be a int
+	// When indices.size() < shape.size(), the result should be another arr
+
+	inline bool is_int() const {
+		return type.is_int();
+	}
+	inline bool is_arr() const {
+		return type.is_arr();
+	}
+
+	static LVal make_int(const string &ident) {
+		return LVal{ident, Type{type_t::INT, {}}, {}};
+	}
+	static LVal make_arr(const string &ident, const vector<int> &shape, const vector<shared_ptr<Exp>> &indices) {
+		return LVal{ident, Type{type_t::ARR, shape}, indices};
+	}
 };
 
 enum class exp_t {
@@ -25,6 +79,9 @@ enum class exp_t {
 	LVAL,
 
 	FUNC_CALL,
+
+	ARR_ADDR,
+	ADDR_ADD,
 
 	// POSITIVE won't appear in the final AST
 	// NEGATIVE will be converted to SUB
@@ -69,10 +126,12 @@ class Exp {
 public:
 	exp_t type;
 	int number;		// For NUMBER
-	string ident;	// For LVAL or FUNC_CALL
-	shared_ptr<Exp> lhs;
-	shared_ptr<Exp> rhs;
+	LVal lval;	// For LVAL
+	string func_name;	// For FUNC_CALL
+	string arr_name;	// For ARR_ADDR
 	vector<shared_ptr<Exp>> args;	// For FUNC_CALL
+	shared_ptr<Exp> lhs;	// For binary ops
+	shared_ptr<Exp> rhs;	// For unary & binary ops
 
 	Exp() = default;
 	Exp(int x) : type(exp_t::NUMBER), number(x) {}
@@ -87,7 +146,7 @@ public:
 
 class AssignInst : public Inst {
 public:
-	string ident;
+	LVal lval;
 	Exp exp;
 };
 
@@ -185,7 +244,15 @@ public:
 // FuncFParam - A function formal parameter
 class FuncFParam {
 public:
-	type_t type;
+	Type type;
+	string ident;
+};
+
+
+// FuncLocalVar - A function local variable
+class FuncLocalVar {
+public:
+	Type type;
 	string ident;
 };
 
@@ -193,9 +260,10 @@ public:
 // Function - A function definition
 class Function {
 public:
-	type_t ret_type;
+	type_t ret_type;	// Can only be INT or VOID
 	string name;
 	vector<FuncFParam> fparams;
+	vector<FuncLocalVar> local_vars;
 	BlockList blocks;
 };
 
@@ -203,8 +271,10 @@ public:
 // GlobalDecl - A global variable declaration
 class GlobalDecl {
 public:
-	type_t type;
+	Type type;
 	string ident;
+	int init_val;	// For type == INT
+	vector<int> arr_init_vals;	// For type == ARR
 };
 
 

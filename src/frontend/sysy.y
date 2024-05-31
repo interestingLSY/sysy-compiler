@@ -10,6 +10,7 @@
 #include <iostream>
 #include <memory>
 #include <string>
+#include <vector>
 
 #include "frontend/ast.h"
 #include "utils/utils.h"
@@ -35,6 +36,57 @@ std::unique_ptr<TARGET> cast_uptr(AST::Base *base) {
   );
 }
 
+// A helper class for representing a list of indices
+class Indices {
+public:
+  std::unique_ptr<AST::Exp> exp;
+  std::unique_ptr<Indices> recur;
+
+  std::vector<std::unique_ptr<AST::Exp>> to_vector() {
+    std::vector<std::unique_ptr<AST::Exp>> ret;
+    ret.push_back(std::move(exp));
+    std::unique_ptr<Indices> *cur = &recur;
+    while (cur->get()) {
+      ret.push_back(std::move((*cur)->exp));
+      cur = &((*cur)->recur);
+    }
+    return ret;
+  }
+};
+
+// A helper class for parsing the array initialization list
+class InitValListItem : public AST::Base {
+public:
+  // If exp_item is non-null, it means this item is an expression
+  // If list_item is non-null, it means this item is another InitValListItem
+  // If both are null, it means "the current list is empty", which should only
+  // appear as the first element of some list
+  std::unique_ptr<AST::Exp> exp_item;
+  std::unique_ptr<InitValListItem> list_item;
+
+  std::unique_ptr<InitValListItem> recur;  // Points to the next item, can be nullptr
+
+  std::unique_ptr<AST::InitValList> to_init_val_list() {
+    std::unique_ptr<AST::InitValList> ret = std::make_unique<AST::InitValList>();
+    if (!exp_item && !list_item) {
+      // I am representing an empty list
+      return ret;
+    }
+    InitValListItem* cur = this;
+    while (cur) {
+      if (cur->exp_item) {
+        ret->items.push_back(std::move(cur->exp_item));
+      } else {
+        ret->items.push_back(cur->list_item->to_init_val_list());
+      }
+      cur = cur->recur.get();
+    }
+    return ret;
+  }
+
+  void print(int depth) const {}
+};
+
 %}
 
 // 定义 parser 函数和错误处理函数的附加参数
@@ -52,6 +104,8 @@ std::unique_ptr<TARGET> cast_uptr(AST::Base *base) {
   int int_val;
   AST::Base *ast_val;
   AST::type_t ast_type_val;
+  class Indices *indices_val;
+  class InitValListItem *init_val_list_val;
 }
 
 // lexer 返回的所有 token 种类的声明
@@ -64,9 +118,11 @@ std::unique_ptr<TARGET> cast_uptr(AST::Base *base) {
 // 非终结符的类型定义
 %type <int_val> Number
 %type <ast_type_val> Type
+%type <indices_val> Indices
+%type <init_val_list_val> InitValListItem
 %type <ast_val> TopLevel TopLevelDef_
-%type <ast_val> VarDecl_ VarDef
-%type <ast_val> FuncDef FuncFParam FuncRParam
+%type <ast_val> VarDecl_ VarDef SingleVarDef_
+%type <ast_val> FuncDef SingleFuncFParam_ FuncFParam FuncRParam
 %type <ast_val> Block BlockBody BlockItem_
 %type <ast_val> LVal Exp LOrExp LAndExp EqExp RelExp AddExp MulExp UnaryExp UnaryOp PrimaryExp
 %type <ast_val> Stmt ReturnStmt AssignStmt NopStmt ExpStmt
@@ -108,6 +164,8 @@ TopLevelDef_
 
 VarDecl_
   : CONST Type VarDef ';' {
+    // Here we must use `Type` instead of `INT` to avoid shift/reduce conflict,
+    // although here `Type` can only be `INT`
     $$ = $3;
     AST::VarDef* cur_vardef = dynamic_cast<AST::VarDef*>($$);
     while (cur_vardef) {
@@ -134,30 +192,82 @@ Type
   }
 
 
+InitValListItem
+  : Exp {
+    auto ast = new InitValListItem();
+    ast->exp_item = cast_uptr<AST::Exp>($1);
+    $$ = ast;
+  }
+  | Exp ',' InitValListItem {
+    auto ast = new InitValListItem();
+    ast->exp_item = cast_uptr<AST::Exp>($1);
+    ast->recur = cast_uptr<InitValListItem>($3);
+    $$ = ast;
+  }
+  | '{' '}' {
+    auto lower_item = std::make_unique<InitValListItem>();
+    lower_item->exp_item = nullptr;
+    lower_item->list_item = nullptr;
+    auto ast = new InitValListItem();
+    ast->list_item = std::move(lower_item);
+    $$ = ast;
+  }
+  | '{' '}' ',' InitValListItem {
+    auto lower_item = std::make_unique<InitValListItem>();
+    lower_item->exp_item = nullptr;
+    lower_item->list_item = nullptr;
+    auto ast = new InitValListItem();
+    ast->list_item = std::move(lower_item);
+    ast->recur = cast_uptr<InitValListItem>($4);
+    $$ = ast;
+  }
+  | '{' InitValListItem '}' {
+    auto ast = new InitValListItem();
+    ast->list_item = cast_uptr<InitValListItem>($2);
+    $$ = ast;
+  }
+  | '{' InitValListItem '}' ',' InitValListItem {
+    auto ast = new InitValListItem();
+    ast->list_item = cast_uptr<InitValListItem>($2);
+    ast->recur = cast_uptr<InitValListItem>($5);
+    $$ = ast;
+  }
+
+  
+SingleVarDef_
+  : LVal {
+    auto ast = new AST::VarDef();
+    ast->lval = cast_uptr<AST::LVal>($1);
+    $$ = ast;
+  }
+  | LVal '=' Exp {
+    auto ast = new AST::VarDef();
+    ast->lval = cast_uptr<AST::LVal>($1);
+    ast->init_val = cast_uptr<AST::Exp>($3);
+    $$ = ast;
+  }
+  | LVal '=' '{' InitValListItem '}' {
+    auto ast = new AST::VarDef();
+    ast->lval = cast_uptr<AST::LVal>($1);
+    ast->init_val_list = cast_uptr<InitValListItem>($4)->to_init_val_list();
+    $$ = ast;
+  }
+  | LVal '=' '{' '}' {
+    auto ast = new AST::VarDef();
+    ast->lval = cast_uptr<AST::LVal>($1);
+    ast->init_val_list = std::make_unique<AST::InitValList>();
+    $$ = ast;
+  }
+
+
 VarDef
-  : IDENT {
-    auto ast = new AST::VarDef();
-    ast->ident = *unique_ptr<string>($1);
-    $$ = ast;
+  : SingleVarDef_ {
+    $$ = $1;
   }
-  | IDENT '=' Exp {
-    auto ast = new AST::VarDef();
-    ast->ident = *unique_ptr<string>($1);
-    ast->init_val = cast_uptr<AST::Exp>($3);
-    $$ = ast;
-  }
-  | IDENT ',' VarDef {
-    auto ast = new AST::VarDef();
-    ast->ident = *unique_ptr<string>($1);
+  | SingleVarDef_ ',' VarDef {
+    auto ast = (AST::VarDef*)($1);
     ast->recur = cast_uptr<AST::VarDef>($3);
-    $$ = ast;
-  }
-  | IDENT '=' Exp ',' VarDef {
-    auto ast = new AST::VarDef();
-    ast->ident = *unique_ptr<string>($1);
-    ast->init_val = cast_uptr<AST::Exp>($3);
-    ast->recur = cast_uptr<AST::VarDef>($5);
-    $$ = ast;
+    $$ = $1;
   }
 
 
@@ -179,19 +289,49 @@ FuncDef
   }
 
 
-FuncFParam
+SingleFuncFParam_
   : INT IDENT {
     auto ast = new AST::FuncFParam();
-    ast->type = AST::type_t::INT;
-    ast->ident = *unique_ptr<string>($2);
+    ast->lval = std::make_unique<AST::LVal>();
+    ast->lval->type = AST::lval_t::VAR;
+    ast->lval->ident = *unique_ptr<string>($2);
     $$ = ast;
   }
-  | INT IDENT ',' FuncFParam {
+  | INT IDENT '[' ']' {
     auto ast = new AST::FuncFParam();
-    ast->type = AST::type_t::INT;
-    ast->ident = *unique_ptr<string>($2);
-    ast->recur = cast_uptr<AST::FuncFParam>($4);
+    ast->lval = std::make_unique<AST::LVal>();
+    ast->lval->type = AST::lval_t::ARR;
+    ast->lval->ident = *unique_ptr<string>($2);
+
+    std::unique_ptr<AST::Exp> zero_exp = std::make_unique<AST::Exp>();
+    zero_exp->type = AST::exp_t::NUMBER;
+    zero_exp->number = 0;
+    ast->lval->indices.push_back(std::move(zero_exp));
     $$ = ast;
+  }
+  | INT IDENT '[' ']' Indices {
+    auto ast = new AST::FuncFParam();
+    ast->lval = std::make_unique<AST::LVal>();
+    ast->lval->type = AST::lval_t::ARR;
+    ast->lval->ident = *unique_ptr<string>($2);
+    ast->lval->indices = std::unique_ptr<Indices>($5)->to_vector();
+
+    std::unique_ptr<AST::Exp> zero_exp = std::make_unique<AST::Exp>();
+    zero_exp->type = AST::exp_t::NUMBER;
+    zero_exp->number = 0;
+    ast->lval->indices.insert(ast->lval->indices.begin(), std::move(zero_exp));
+    $$ = ast;
+  }
+
+
+FuncFParam
+  : SingleFuncFParam_ {
+    $$ = $1;
+  }
+  | SingleFuncFParam_ ',' FuncFParam {
+    auto ast = (AST::FuncFParam*)($1);
+    ast->recur = cast_uptr<AST::FuncFParam>($3);
+    $$ = $1;
   }
 
 
@@ -419,7 +559,29 @@ ExpStmt
 LVal
   : IDENT {
     auto ast = new AST::LVal();
+    ast->type = AST::lval_t::VAR;
     ast->ident = *unique_ptr<string>($1);
+    $$ = ast;
+  }
+  | IDENT Indices {
+    auto ast = new AST::LVal();
+    ast->type = AST::lval_t::ARR;
+    ast->ident = *unique_ptr<string>($1);
+    ast->indices = std::unique_ptr<Indices>($2)->to_vector();
+    $$ = ast;
+  }
+
+
+Indices
+  : '[' Exp ']' {
+    auto ast = new Indices();
+    ast->exp = cast_uptr<AST::Exp>($2);
+    $$ = ast;
+  }
+  | '[' Exp ']' Indices {
+    auto ast = new Indices();
+    ast->exp = cast_uptr<AST::Exp>($2);
+    ast->recur = std::unique_ptr<Indices>($4);
     $$ = ast;
   }
 

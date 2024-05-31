@@ -61,7 +61,7 @@ static inline std::list<T>& operator>=(std::list<T> &lhs, const std::list<T> &rh
 
 // The online judge returns the exit code when the program aborts
 // We use an `assert()` with custom return code to handle this
-#define my_assert(cond, code) \
+#define my_assert(code, cond) \
 	if (!(cond)) { \
 		fprintf(stderr, "Assertion failed: %s\n", #cond); \
 		exit(code); \

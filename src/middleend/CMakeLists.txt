@@ -3,5 +3,7 @@ add_library(
 	ast2kirt.cpp
 	kirt.cpp
 	kirt2strkir.cpp
+	pass_collapse_arr.cpp
 	pass_repl_unasm.cpp
+	pass_fill_block_name.cpp
 )

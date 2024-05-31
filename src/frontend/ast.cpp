@@ -86,12 +86,15 @@ void TopLevel::print(int depth) const {
 
 void VarDef::print(int depth) const {
     cout << indent(depth) << "VarDef {" << endl;
-    cout << indent(depth + 1) << "ident: " << ident << endl;
+    lval->print(depth + 1);
     if (is_const) {
         cout << indent(depth + 1) << "constant" << endl;
     }
     if (init_val) {
         init_val->print(depth + 1);
+    }
+    if (init_val_list) {
+        init_val_list->print(depth + 1);
     }
     if (recur) {
         recur->print(depth);
@@ -112,8 +115,7 @@ void FuncDef::print(int depth) const {
 
 void FuncFParam::print(int depth) const {
     cout << indent(depth) << "FuncFParam {" << endl;
-    cout << indent(depth + 1) << "type: " << type2str(type) << endl;
-    cout << indent(depth + 1) << "ident: " << ident << endl;
+    lval->print(depth + 1);
     if (recur) {
         recur->print(depth);
     }
@@ -187,6 +189,14 @@ void ExpStmt::print(int depth) const {
 void LVal::print(int depth) const {
     cout << indent(depth) << "LVal {" << endl;
     cout << indent(depth + 1) << "ident: " << ident << endl;
+    if (type == lval_t::ARR) {
+        cout << indent(depth + 1) << "array" << endl;
+    }
+    if (type == AST::lval_t::ARR) {
+        for (auto &exp : indices) {
+            exp->print(depth + 1);
+        }
+    }
     cout << indent(depth) << "}" << endl;
 }
 
@@ -209,6 +219,14 @@ void Exp::print(int depth) const {
         rhs->print(depth + 1);
     } else {
         assert(0);
+    }
+    cout << indent(depth) << "}" << endl;
+}
+
+void InitValList::print(int depth) const {
+    cout << indent(depth) << "InitValList {" << endl;
+    for (auto &item : items) {
+        item->print(depth + 1);
     }
     cout << indent(depth) << "}" << endl;
 }

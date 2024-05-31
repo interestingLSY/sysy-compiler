@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cassert>
+#include <functional>
 #include <map>
 #include <optional>
 #include <unordered_map>
@@ -30,22 +31,53 @@ using std::pair;
 // never appear in the KIRT. When we encounter a constant definition, we store
 // the constant value in the manager. When we encounter a variable, we check if
 // it is a constant. If it is, we replace the variable with the constant value.
+enum class var_t {
+	CONST,
+	LOCAL_VAR,
+	GLOBAL_VAR,
+	PARAM,
+};
+
+struct VarDefinitionMeta {
+	int level;
+	int idx;	// We can not use leval to rename vars, since it is not unique
+	Type type;
+	var_t var_type;
+	int const_val;
+};
+
 class VarManager {
 private:
-	struct DefinitionMeta {
-		int level;
-		bool is_const;
-		int const_val;
-	};
-
+	Counter idx_counter;
 	int cur_lvl = 0;	// Current level
-	std::unordered_map<std::string, std::vector<DefinitionMeta>> orig_name2defined_at_lvls;
+	std::unordered_map<std::string, std::vector<VarDefinitionMeta>> orig_name2def_metas;
 
-	string rename(string ident, int level) {
-		return "@" + ident + "_lv" + std::to_string(level);
+	// A list of the current function's local variables
+	// Cleared upon entering a new function, and collected upon exiting a function
+	vector<FuncLocalVar> cur_func_local_vars;
+
+	inline string rename(string ident, const VarDefinitionMeta &meta) {
+		if (meta.var_type == var_t::GLOBAL_VAR) {
+			return "@" + ident + "_globl";
+		}
+		return "@" + ident + "_idx" + std::to_string(meta.idx);
 	}
 
 public:
+	// Called when entering a new function
+	void on_enter_func() {
+		idx_counter.reset();
+		cur_func_local_vars.clear();
+	}
+
+	vector<FuncLocalVar>& get_cur_func_new_local_vars() {
+		return cur_func_local_vars;
+	}
+
+	// Called when exiting a function
+	void on_exit_func() {
+	}
+
 	// Called when entering a new scope
 	void on_enter_scope() {
 		cur_lvl += 1;
@@ -53,7 +85,7 @@ public:
 
 	// Called when leaving a scope
 	void on_exit_scope() {
-		for (auto &[orig_name, def_metas] : orig_name2defined_at_lvls) {
+		for (auto &[orig_name, def_metas] : orig_name2def_metas) {
 			while (!def_metas.empty() && def_metas.back().level == cur_lvl) {
 				def_metas.pop_back();
 			}
@@ -62,47 +94,107 @@ public:
 	}
 
 	// Called when defining a new variable or constant
-	void on_define_var(string orig_name, bool is_const, int const_value = 0) {
-		if (!orig_name2defined_at_lvls[orig_name].empty() &&
-			orig_name2defined_at_lvls[orig_name].back().level == cur_lvl) {
+	void on_define_var(string orig_name, const Type &type, var_t var_type, int const_value = 0) {
+		if (!orig_name2def_metas[orig_name].empty() &&
+			orig_name2def_metas[orig_name].back().level == cur_lvl) {
 			printf("Variable %s redefined at level %d\n", orig_name.c_str(), cur_lvl);
 			assert(0);
 		}
-		orig_name2defined_at_lvls[orig_name].push_back({cur_lvl, is_const, const_value});
+		orig_name2def_metas[orig_name].push_back({cur_lvl, idx_counter.next(), type, var_type, const_value});
+		if (var_type == var_t::LOCAL_VAR) {
+			cur_func_local_vars.push_back({type, this->operator()(orig_name)});
+		}
+	}
+
+	// Directly add a local variable to the current function, useful when processing
+	// short-circuit evaluation (where we need to add a temporary variable)
+	void add_local_var_directly(string name, Type type) {
+		cur_func_local_vars.push_back({type, name});
 	}
 
 	// Rename a variable
 	string operator()(string orig_name) {
-		assert (orig_name2defined_at_lvls.count(orig_name) != 0);
-		int target_lvl = orig_name2defined_at_lvls[orig_name].back().level;
-		return rename(orig_name, target_lvl);
+		assert (orig_name2def_metas.count(orig_name) != 0);
+		VarDefinitionMeta &meta = orig_name2def_metas[orig_name].back();
+		return rename(orig_name, meta);
 	}
 
-	// Return if a variable is a constant in the current scope
-	bool is_constant(string orig_name) {
-		return orig_name2defined_at_lvls[orig_name].back().is_const;
-	}
-
-	// Get the constant value of a variable
-	int get_const_val(string orig_name) {
-		assert(orig_name2defined_at_lvls[orig_name].back().is_const);
-		return orig_name2defined_at_lvls[orig_name].back().const_val;
+	// Return the definition meta of a variable
+	VarDefinitionMeta& get_def_meta(string orig_name) {
+		return orig_name2def_metas[orig_name].back();
 	}
 } var_manager;
 
+// A helper function that converts an AST init val list (can be incomplete) to a full list
+vector<std::unique_ptr<AST::Exp>> ast_init_val_list2full(
+	const KIRT::Type &arr_type,
+	std::unique_ptr<AST::InitValList> &init_val_list
+) {
+	using std::unique_ptr;
+	vector<std::unique_ptr<AST::Exp>> res;
+
+	int ndims = arr_type.dims();
+	int numel = arr_type.numel();
+	for (int i = 0; i < numel; ++i)
+		res.push_back(nullptr);
+	
+	// Use the given init_val_list to fill in a subarray in `res`, which starts
+	// from `start_index` and has dimensions from the `start_dim`
+	std::function<void(AST::InitValList*, int, int)> fill_in_result = [&](
+		AST::InitValList *init_val_list,
+		int start_dim,
+		int start_index
+	) {
+		int next_elem_offset = 0;	// The offset of the next element to be filled, relative to the start_index
+		for (std::unique_ptr<AST::Base> &item : init_val_list->items) {
+			if (is_instance_of(item.get(), AST::InitValList*)) {
+				// Find the smallest dim that "aligns" with `next_elem_offset`
+				int aligned_dim = -1;
+				for (int dim = ndims-1; dim >= 0; --dim) {
+					if (next_elem_offset % arr_type.stride(dim) == 0) {
+						aligned_dim = dim;
+					}
+				}
+				my_assert(33, aligned_dim != -1 && aligned_dim != ndims-1);
+				fill_in_result(
+					dynamic_cast<AST::InitValList*>(item.get()),
+					aligned_dim+1,
+					start_index + next_elem_offset
+				);
+				next_elem_offset += arr_type.stride(aligned_dim);
+			} else if (is_instance_of(item.get(), AST::Exp*)) {
+				res[start_index + next_elem_offset] = std::unique_ptr<AST::Exp>(
+					dynamic_cast<AST::Exp *>(item.release())
+				);
+				next_elem_offset += 1;
+			} else {
+				assert(0);
+			}
+		}
+	};
+	fill_in_result(init_val_list.get(), 0, 0);
+
+	for (std::unique_ptr<AST::Exp> &ptr : res)
+		if (!ptr) {
+			ptr = std::make_unique<AST::Exp>();
+			ptr->type = AST::exp_t::NUMBER;
+			ptr->number = 0;
+		}
+	
+	return res;
+}	
+
+// Calculate the value of a constant expression
 int calc_const_value(const std::unique_ptr<AST::Exp> &exp) {
 	switch (exp->type) {
 		case AST::exp_t::NUMBER:
 			return exp->number;
 		case AST::exp_t::LVAL:
-			if (!var_manager.is_constant(exp->lval->ident)) {
-				printf("Variable %s is not in the constant table\n", exp->lval->ident.c_str());
-				assert(0);
-			}
-			return var_manager.get_const_val(exp->lval->ident);
+			my_assert(24, var_manager.get_def_meta(exp->lval->ident).var_type == var_t::CONST);
+			return var_manager.get_def_meta(exp->lval->ident).const_val;
 		case AST::exp_t::FUNC_CALL:
 			printf("FUNC_CALL encountered when calculating constant value\n");
-			assert(0);
+			my_assert(25, false);
 		case AST::exp_t::POSITIVE:
 			return calc_const_value(exp->rhs);
 		case AST::exp_t::NEGATIVE:
@@ -158,9 +250,9 @@ BlockList get_unit_blocklist(std::shared_ptr<Block> target = nullptr) {
 	return res;
 }
 
-shared_ptr<AssignInst> get_assign_inst(const string &ident, const Exp &exp) {
+shared_ptr<AssignInst> get_assign_inst(const LVal &lval, const Exp &exp) {
 	shared_ptr<AssignInst> res = std::make_shared<AssignInst>();
-	res->ident = ident;
+	res->lval = lval;
 	res->exp = exp;
 	return res;
 }
@@ -253,31 +345,33 @@ exp_t ast_binary_exp_t2kirt_exp_t(AST::exp_t ast_type_t) {
 Counter block_id_counter;
 
 // Function declarations
-Function ast2kirt(AST::FuncDef &func_def, BlockList global_decl_blocks);
+Function ast2kirt(AST::FuncDef &func_def);
 BlockList ast2kirt(AST::Block &block);
 BlockList ast2kirt(AST::BlockItem &block_item);
 BlockList ast2kirt(AST::VarDef &var_def);
 pair<shared_ptr<Exp>, BlockList> ast2kirt(AST::Exp &exp);
-std::pair<shared_ptr<GlobalDecl>, BlockList> ast2kirt_global_decl(AST::VarDef &var_def);
+shared_ptr<GlobalDecl> ast2kirt_global_decl(AST::VarDef &var_def);
 
 Program ast2kirt(AST::CompUnit &comp_unit) {
 	block_id_counter.reset();
 	// Register library functions
-	auto register_library_function = [&](string name, vector<type_t> args_type, type_t ret_type) {
+	auto register_library_function = [&](string name, vector<Type> args_type, type_t ret_type) {
 		shared_ptr<Function> func_ptr = std::make_shared<Function>();
 		func_ptr->ret_type = ret_type;
 		func_ptr->name = name;
-		for (type_t arg_type : args_type) {
+		for (const Type &arg_type : args_type) {
 			func_ptr->fparams.push_back(FuncFParam {arg_type, "arg"});
 		}
 		KIRT::func_map[name] = func_ptr;
 	};
+	Type type_int = {type_t::INT, {}};
+	Type type_1d_arr = {type_t::ARR, {0}};
 	register_library_function("getint", {}, type_t::INT);
 	register_library_function("getch", {}, type_t::INT);
-	// register_library_function("getarray", {??}, type_t::INT);
-	register_library_function("putint", {type_t::INT}, type_t::VOID);
-	register_library_function("putch", {type_t::INT}, type_t::VOID);
-	// register_library_function("putarray", {??}, type_t::VOID);
+	register_library_function("getarray", {type_1d_arr}, type_t::INT);
+	register_library_function("putint", {type_int}, type_t::VOID);
+	register_library_function("putch", {type_int}, type_t::VOID);
+	register_library_function("putarray", {type_int, type_1d_arr}, type_t::VOID);
 	register_library_function("starttime", {}, type_t::VOID);
 	register_library_function("stoptime", {}, type_t::VOID);
 
@@ -303,13 +397,10 @@ Program ast2kirt(AST::CompUnit &comp_unit) {
 
 	// Get blocklists for initializing global variables
 	// There blocks will be inserted before `main()`
-	BlockList global_decl_blocks = get_unit_blocklist();
 	for (AST::VarDef *var_def : global_decls) {
-		auto [global_decl, blocklist] = ast2kirt_global_decl(*var_def);
+		auto global_decl = ast2kirt_global_decl(*var_def);
 		if (global_decl) {
 			program.global_decls.push_back(global_decl);
-			fill_in_empty_terminst_target(global_decl_blocks, blocklist.blocks.front());
-			global_decl_blocks.blocks << blocklist.blocks;
 			KIRT::global_decl_map[global_decl->ident] = global_decl;
 		} else {
 			// A constant, do nothing
@@ -317,7 +408,7 @@ Program ast2kirt(AST::CompUnit &comp_unit) {
 	}
 
 	for (AST::FuncDef *func_def : funcs) {
-		Function func = ast2kirt(*func_def, global_decl_blocks);
+		Function func = ast2kirt(*func_def);
 		shared_ptr<Function> func_ptr = std::make_shared<Function>(func);
 		program.funcs.emplace_back(func_ptr);
 		KIRT::func_map[func.name] = func_ptr;
@@ -330,39 +421,57 @@ Program ast2kirt(AST::CompUnit &comp_unit) {
 // Return (global_decl, blocklist)
 // The blocklist contains zero or one assignment instruction, depending on
 // whether the variable is initialized
-std::pair<shared_ptr<GlobalDecl>, BlockList> ast2kirt_global_decl(AST::VarDef &var_def) {
-	if (!var_def.is_const) {
-		// A mutable global variable
-		var_manager.on_define_var(var_def.ident, false);
-		shared_ptr<GlobalDecl> global_decl = std::make_shared<GlobalDecl>();
-		global_decl->type = KIRT::type_t::INT;	// TODO Support array
-		global_decl->ident = var_manager(var_def.ident);
-		if (var_def.init_val) {
-			auto [init_val_exp, init_val_blocks] = ast2kirt(*var_def.init_val);
-			init_val_blocks.blocks.front()->name = "init_" + global_decl->ident.substr(1);
-
-			shared_ptr<AssignInst> assign_inst = get_assign_inst(global_decl->ident, *init_val_exp);
-			shared_ptr<Block> assign_block = get_unit_block();
-			assign_block->name = "init_assign_" + global_decl->ident.substr(1);
-			assign_block->insts.push_back(assign_inst);
-
-			fill_in_empty_terminst_target(init_val_blocks, assign_block);
-			init_val_blocks.blocks.push_back(assign_block);
-			return {global_decl, init_val_blocks};
+shared_ptr<GlobalDecl> ast2kirt_global_decl(AST::VarDef &var_def) {
+	if (var_def.lval->type == AST::lval_t::VAR) {
+		if (!var_def.is_const) {
+			// A mutable global variable
+			var_manager.on_define_var(var_def.lval->ident, {type_t::INT, {}}, var_t::GLOBAL_VAR);
+			shared_ptr<GlobalDecl> global_decl = std::make_shared<GlobalDecl>();
+			global_decl->type.type = KIRT::type_t::INT;
+			global_decl->ident = var_manager(var_def.lval->ident);
+			if (var_def.init_val)
+				global_decl->init_val = calc_const_value(var_def.init_val);	// Must be a constant expression
+			else
+				global_decl->init_val = 0;
+			return global_decl;
 		} else {
-			BlockList placeholder_blocklist = get_unit_blocklist();
-			placeholder_blocklist.blocks.front()->name = "init_" + global_decl->ident.substr(1);
-			return {global_decl, placeholder_blocklist};
+			// A global constant
+			int const_val = calc_const_value(var_def.init_val);
+			var_manager.on_define_var(var_def.lval->ident, {type_t::INT, {}}, var_t::CONST, const_val);
+			return nullptr;
 		}
+	} else if (var_def.lval->type == AST::lval_t::ARR) {
+		vector<int> shape;
+		for (const std::unique_ptr<AST::Exp> &exp : var_def.lval->indices) {	// Here indices are the shape of the array
+			shape.push_back(calc_const_value(exp));
+		}
+		// Here we regard a const array as a mutable array
+		Type arr_type = {type_t::ARR, shape};
+		var_manager.on_define_var(var_def.lval->ident, arr_type, var_t::GLOBAL_VAR);
+
+		vector<int> init_vals;
+		if (var_def.init_val_list) {
+			vector<std::unique_ptr<AST::Exp>> init_exps;
+			init_exps = ast_init_val_list2full(arr_type, var_def.init_val_list);
+			for (std::unique_ptr<AST::Exp> &exp : init_exps) {
+				init_vals.push_back(calc_const_value(exp));
+			}
+		} else {
+			init_vals = vector<int>(arr_type.numel(), 0);
+		}
+
+		shared_ptr<GlobalDecl> global_decl = std::make_shared<GlobalDecl>();
+		global_decl->ident = var_manager(var_def.lval->ident);
+		global_decl->type = arr_type;
+		global_decl->arr_init_vals = init_vals;
+		return global_decl;
 	} else {
-		// A global constant
-		int const_val = calc_const_value(var_def.init_val);
-		var_manager.on_define_var(var_def.ident, true, const_val);
-		return {nullptr, get_unit_blocklist()};
+		assert(0);
 	}
 }
 
-Function ast2kirt(AST::FuncDef &func_def, BlockList global_decl_blocks) {
+Function ast2kirt(AST::FuncDef &func_def) {
+	var_manager.on_enter_func();
 	var_manager.on_enter_scope();
 
 	Function func;
@@ -372,24 +481,30 @@ Function ast2kirt(AST::FuncDef &func_def, BlockList global_decl_blocks) {
 	std::unique_ptr<AST::FuncFParam>* cur_fparam = &func_def.fparam;
 	while (cur_fparam->get()) {
 		AST::FuncFParam *fparam = cur_fparam->get();
-		var_manager.on_define_var(fparam->ident, false);
+
+		Type type;
+		vector<int> shape;
+		if (fparam->lval->type == AST::lval_t::VAR) {
+			type = {type_t::INT, {}};
+		} else if (fparam->lval->type == AST::lval_t::ARR) {
+			for (const std::unique_ptr<AST::Exp> &exp : fparam->lval->indices) {
+				shape.push_back(calc_const_value(exp));
+			}
+			type = {type_t::ARR, shape};
+		} else {
+			assert(0);
+		}
+
+		var_manager.on_define_var(fparam->lval->ident, type, var_t::PARAM);
 		func.fparams.push_back(FuncFParam {
-			ast_type_t2kirt_type_t(fparam->type),
-			var_manager(fparam->ident)
+			type,
+			var_manager(fparam->lval->ident)
 		});
 		cur_fparam = &(cur_fparam->get()->recur);
 	}
 
 	func.blocks = ast2kirt(*func_def.block);
-	if (func.name != "main") {
-		func.blocks.blocks.front()->name = "real_entry";	// The `entry` block performs some initialization, and "real_entry" is the real entry	
-	} else {
-		// Perform global variable initialization
-		func.blocks.blocks.front()->name = "real_entry2";
-		global_decl_blocks.blocks.front()->name = "real_entry";
-		fill_in_empty_terminst_target(global_decl_blocks, func.blocks.blocks.front());
-		global_decl_blocks.blocks >> func.blocks.blocks;
-	}
+	func.blocks.blocks.front()->name = "real_entry";
 	
 	// Construct the epilogue block
 	shared_ptr<ReturnInst> epilogue_block_ret_inst = std::make_shared<ReturnInst>();
@@ -410,7 +525,10 @@ Function ast2kirt(AST::FuncDef &func_def, BlockList global_decl_blocks) {
 	fill_in_empty_terminst_target(func.blocks, epilogue_block);
 	func.blocks.blocks.push_back(epilogue_block);
 
+	func.local_vars = var_manager.get_cur_func_new_local_vars();
+
 	var_manager.on_exit_scope();
+	var_manager.on_exit_func();
 
 	return func;
 }
@@ -492,7 +610,25 @@ BlockList ast2kirt(AST::BlockItem &block_item) {
 			AST::AssignStmt *assign_stmt = dynamic_cast<AST::AssignStmt *>(cur_item);
 			auto [exp, exp_blocks] = ast2kirt(*assign_stmt->exp);
 
-			shared_ptr<AssignInst> assign_inst = get_assign_inst(var_manager(assign_stmt->lval->ident), *exp);
+			string ident = var_manager(assign_stmt->lval->ident);
+			LVal lval;
+			if (assign_stmt->lval->type == AST::lval_t::VAR) {
+				lval = LVal::make_int(ident);
+			} else {
+				vector<shared_ptr<Exp>> indices;
+				for (const std::unique_ptr<AST::Exp> &exp_ptr : assign_stmt->lval->indices) {
+					auto [index_exp, index_exp_blocks] = ast2kirt(*exp_ptr);
+					fill_in_empty_terminst_target(exp_blocks, index_exp_blocks.blocks.front());
+					index_exp_blocks.blocks.front()->name = "index_" + std::to_string(block_id_counter.next());
+					indices.push_back(index_exp);
+					exp_blocks.blocks << index_exp_blocks.blocks;
+				}
+				vector<int> &shape = var_manager.get_def_meta(assign_stmt->lval->ident).type.shape;
+				assert(shape.size() == indices.size());
+				lval = LVal::make_arr(ident, shape, indices);
+			}
+
+			shared_ptr<AssignInst> assign_inst = get_assign_inst(lval, *exp);
 			shared_ptr<Block> assign_inst_block = get_unit_block();
 			assign_inst_block->insts.push_back(assign_inst);
 			assign_inst_block->name = "assign_" + std::to_string(block_id_counter.next());
@@ -614,33 +750,102 @@ BlockList ast2kirt(AST::BlockItem &block_item) {
 }
 
 BlockList ast2kirt(AST::VarDef &var_def) {
-	if (!var_def.is_const) {
-		var_manager.on_define_var(var_def.ident, false);
+	if (var_def.lval->type == AST::lval_t::VAR) {
+		if (!var_def.is_const) {
+			var_manager.on_define_var(var_def.lval->ident, {type_t::INT, {}}, var_t::LOCAL_VAR);
+			BlockList assign_insts = get_unit_blocklist();
+			if (var_def.init_val) {
+				// Forge a virtual assignment statement
+				std::unique_ptr<AST::LVal> assign_stmt_lval = std::make_unique<AST::LVal>();
+				assign_stmt_lval->type = AST::lval_t::VAR;
+				assign_stmt_lval->ident = var_def.lval->ident;
+				std::unique_ptr<AST::AssignStmt> assign_stmt = std::make_unique<AST::AssignStmt>();
+				assign_stmt->lval = std::move(assign_stmt_lval);
+				assign_stmt->exp = std::move(var_def.init_val);
+				std::unique_ptr<AST::BlockItem> assign_stmt_block_item = std::make_unique<AST::BlockItem>();
+				assign_stmt_block_item->item = std::move(assign_stmt);
+				assign_insts = ast2kirt(*assign_stmt_block_item);
+			}
+
+			BlockList following_blocks = var_def.recur ? ast2kirt(*var_def.recur) : get_unit_blocklist();
+			following_blocks.blocks.front()->name = "avar_" + std::to_string(block_id_counter.next());
+
+			fill_in_empty_terminst_target(assign_insts, following_blocks.blocks.front());
+			assign_insts.blocks << following_blocks.blocks;
+			return assign_insts;
+		} else {
+			int const_val = calc_const_value(var_def.init_val);
+			var_manager.on_define_var(var_def.lval->ident, {type_t::INT, {}}, var_t::CONST, const_val);
+
+			BlockList following_blocks = var_def.recur ? ast2kirt(*var_def.recur) : get_unit_blocklist();
+			return following_blocks;
+		}
+	} else if (var_def.lval->type == AST::lval_t::ARR) {
+		vector<int> shape;
+		for (const std::unique_ptr<AST::Exp> &exp : var_def.lval->indices) {	// Here indices are the shape of the array
+			shape.push_back(calc_const_value(exp));
+		}
+		// Here we regard a const array as a mutable array
+		Type arr_type = {type_t::ARR, shape};
+		var_manager.on_define_var(var_def.lval->ident, arr_type, var_t::LOCAL_VAR);
+
 		BlockList assign_insts = get_unit_blocklist();
-		if (var_def.init_val) {
-			// Forge a virtual assignment statement
-			std::unique_ptr<AST::LVal> assign_stmt_lval = std::make_unique<AST::LVal>();
-			assign_stmt_lval->ident = var_def.ident;
-			std::unique_ptr<AST::AssignStmt> assign_stmt = std::make_unique<AST::AssignStmt>();
-			assign_stmt->lval = std::move(assign_stmt_lval);
-			assign_stmt->exp = std::move(var_def.init_val);
-			std::unique_ptr<AST::BlockItem> assign_stmt_block_item = std::make_unique<AST::BlockItem>();
-			assign_stmt_block_item->item = std::move(assign_stmt);
-			assign_insts = ast2kirt(*assign_stmt_block_item);
+		if (var_def.init_val_list) {
+			vector<std::unique_ptr<AST::Exp>> init_vals = ast_init_val_list2full(arr_type, var_def.init_val_list);
+			int numel = arr_type.numel();
+			int ndims = arr_type.dims();
+			for (int i = 0; i < numel; ++i) {
+				// Calculate the index
+				int temp_i = i;
+				vector<int> indices;
+				for (int dim = ndims-1; dim >= 0; --dim) {
+					indices.push_back(temp_i % shape[dim]);
+					temp_i /= shape[dim];
+				}
+				std::reverse(indices.begin(), indices.end());
+				
+				// Forge the virtual assign statement
+				vector<std::unique_ptr<AST::Exp>> indices_exp;
+				for (int index : indices) {
+					std::unique_ptr<AST::Exp> index_exp = std::make_unique<AST::Exp>();
+					index_exp->type = AST::exp_t::NUMBER;
+					index_exp->number = index;
+					indices_exp.push_back(std::move(index_exp));
+				}
+
+				std::unique_ptr<AST::LVal> assign_stmt_lval = std::make_unique<AST::LVal>();
+				assign_stmt_lval->type = AST::lval_t::ARR;
+				assign_stmt_lval->ident = var_def.lval->ident;
+				assign_stmt_lval->indices = std::move(indices_exp);
+
+				std::unique_ptr<AST::Exp> assign_stmt_exp = std::make_unique<AST::Exp>();
+				if (var_def.is_const) {
+					assign_stmt_exp->type = AST::exp_t::NUMBER;
+					assign_stmt_exp->number = calc_const_value(init_vals[i]);
+				} else {
+					assign_stmt_exp = std::move(init_vals[i]);
+				}
+				
+				std::unique_ptr<AST::AssignStmt> assign_stmt = std::make_unique<AST::AssignStmt>();
+				assign_stmt->lval = std::move(assign_stmt_lval);
+				assign_stmt->exp = std::move(assign_stmt_exp);
+
+				std::unique_ptr<AST::BlockItem> assign_stmt_block_item = std::make_unique<AST::BlockItem>();
+				assign_stmt_block_item->item = std::move(assign_stmt);
+				BlockList cur_assign_insts = ast2kirt(*assign_stmt_block_item);
+
+				fill_in_empty_terminst_target(assign_insts, cur_assign_insts.blocks.front());
+				assign_insts.blocks << cur_assign_insts.blocks;
+			}
 		}
 
 		BlockList following_blocks = var_def.recur ? ast2kirt(*var_def.recur) : get_unit_blocklist();
-		following_blocks.blocks.front()->name = "avar_" + std::to_string(block_id_counter.next());
-
 		fill_in_empty_terminst_target(assign_insts, following_blocks.blocks.front());
 		assign_insts.blocks << following_blocks.blocks;
+
 		return assign_insts;
 	} else {
-		int const_val = calc_const_value(var_def.init_val);
-		var_manager.on_define_var(var_def.ident, true, const_val);
-
-		BlockList following_blocks = var_def.recur ? ast2kirt(*var_def.recur) : get_unit_blocklist();
-		return following_blocks;
+		assert(0);
 	}
 }
 
@@ -652,24 +857,44 @@ pair<shared_ptr<Exp>, BlockList> ast2kirt(AST::Exp &exp) {
 			kirt_exp->number = exp.number;
 			return {kirt_exp, get_unit_blocklist()};
 		} case AST::exp_t::LVAL: {
-			if (var_manager.is_constant(exp.lval->ident)) {
+			VarDefinitionMeta def_meta = var_manager.get_def_meta(exp.lval->ident);
+			if (def_meta.var_type == var_t::CONST) {
 				// A constant
 				shared_ptr<Exp> kirt_exp = std::make_shared<Exp>();
 				kirt_exp->type = exp_t::NUMBER;
-				kirt_exp->number = var_manager.get_const_val(exp.lval->ident);
+				kirt_exp->number = var_manager.get_def_meta(exp.lval->ident).const_val;
 				return {kirt_exp, get_unit_blocklist()};
 			} else {
-				// A mutable variable
-				shared_ptr<Exp> kirt_exp = std::make_shared<Exp>();
-				kirt_exp->type = exp_t::LVAL;
-				kirt_exp->ident = var_manager(exp.lval->ident);
-				return {kirt_exp, get_unit_blocklist()};
+				if (def_meta.type.is_arr()) {
+					// An array
+					BlockList res_blocklist = get_unit_blocklist();
+					vector<shared_ptr<Exp>> indices;
+					for (const std::unique_ptr<AST::Exp> &exp_ptr : exp.lval->indices) {
+						auto [index_exp, index_exp_blocks] = ast2kirt(*exp_ptr);
+						fill_in_empty_terminst_target(res_blocklist, index_exp_blocks.blocks.front());
+						index_exp_blocks.blocks.front()->name = "index_" + std::to_string(block_id_counter.next());
+						indices.push_back(index_exp);
+						res_blocklist.blocks << index_exp_blocks.blocks;
+					}
+					shared_ptr<Exp> kirt_exp = std::make_shared<Exp>();
+					kirt_exp->type = exp_t::LVAL;
+					kirt_exp->lval = LVal::make_arr(var_manager(exp.lval->ident), def_meta.type.shape, indices);
+					return {kirt_exp, res_blocklist};
+				} else if (def_meta.type.is_int()) {
+					// A mutable variable
+					shared_ptr<Exp> kirt_exp = std::make_shared<Exp>();
+					kirt_exp->type = exp_t::LVAL;
+					kirt_exp->lval = LVal::make_int(var_manager(exp.lval->ident));
+					return {kirt_exp, get_unit_blocklist()};
+				} else {
+					my_assert(30, false);
+				}
 			}
 		} case AST::exp_t::FUNC_CALL: {
 			int func_call_id = block_id_counter.next();
 			shared_ptr<Exp> kirt_exp = std::make_shared<Exp>();
 			kirt_exp->type = exp_t::FUNC_CALL;
-			kirt_exp->ident = exp.func_name;
+			kirt_exp->func_name = exp.func_name;
 
 			BlockList res = get_unit_blocklist();
 			std::unique_ptr<AST::FuncRParam>* cur_rparam = &exp.func_rparam;
@@ -713,6 +938,7 @@ pair<shared_ptr<Exp>, BlockList> ast2kirt(AST::Exp &exp) {
 			string res_varid = "%land_res_" + land_id;
 			shared_ptr<Block> final_block = get_unit_block();
 			final_block->name = "land_fin_" + land_id;
+			var_manager.add_local_var_directly(res_varid, {type_t::INT, {}});
 
 			auto [a_exp, a_exp_blocks] = ast2kirt(*exp.lhs);
 			auto [b_exp, b_exp_blocks] = ast2kirt(*exp.rhs);
@@ -722,14 +948,14 @@ pair<shared_ptr<Exp>, BlockList> ast2kirt(AST::Exp &exp) {
 			b_neq_0->type = exp_t::NEQ0;
 			b_neq_0->lhs = b_exp;
 			b_neq_0->rhs = std::make_shared<Exp>(0);
-			shared_ptr<AssignInst> assign_inst_ans_b = get_assign_inst(res_varid, *b_neq_0);
+			shared_ptr<AssignInst> assign_inst_ans_b = get_assign_inst(LVal::make_int(res_varid), *b_neq_0);
 			b_exp_blocks.blocks.back()->insts.push_back(assign_inst_ans_b);
 			b_exp_blocks.blocks.back()->term_inst = get_jump_inst(final_block);
 			b_exp_blocks.blocks.front()->name = "land_t_" + land_id;
 
 			// Construct block "$ = 0"
 			shared_ptr<Block> else_block = get_unit_block();
-			shared_ptr<AssignInst> assign_inst_ans_0 = get_assign_inst(res_varid, Exp(0));
+			shared_ptr<AssignInst> assign_inst_ans_0 = get_assign_inst(LVal::make_int(res_varid), Exp(0));
 			else_block->insts.push_back(assign_inst_ans_0);
 			else_block->term_inst = get_jump_inst(final_block);
 			else_block->name = "land_f_" + land_id;
@@ -743,20 +969,21 @@ pair<shared_ptr<Exp>, BlockList> ast2kirt(AST::Exp &exp) {
 
 			shared_ptr<Exp> final_exp = std::make_shared<Exp>();
 			final_exp->type = exp_t::LVAL;
-			final_exp->ident = res_varid;
+			final_exp->lval = LVal::make_int(res_varid);
 			return {final_exp, res};
 		}
 		case AST::exp_t::LOGICAL_OR: {
 			// a || b = if (a) { $ = 1; } else { $ = b != 0; }
 			string lor_id = std::to_string(block_id_counter.next());
 			string res_varid = "%lor_res_" + lor_id;
+			var_manager.add_local_var_directly(res_varid, {type_t::INT, {}});
 			shared_ptr<Block> final_block = get_unit_block();
 			final_block->name = "lor_fin_" + lor_id;
 
 			auto [a_exp, a_exp_blocks] = ast2kirt(*exp.lhs);
 			auto [b_exp, b_exp_blocks] = ast2kirt(*exp.rhs);
 
-			shared_ptr<AssignInst> assign_inst_ans_1 = get_assign_inst(res_varid, Exp(1));
+			shared_ptr<AssignInst> assign_inst_ans_1 = get_assign_inst(LVal::make_int(res_varid), Exp(1));
 			shared_ptr<Block> if_block = get_unit_block();
 			if_block->insts.push_back(assign_inst_ans_1);
 			if_block->term_inst = get_jump_inst(final_block);
@@ -766,7 +993,7 @@ pair<shared_ptr<Exp>, BlockList> ast2kirt(AST::Exp &exp) {
 			b_neq_0->type = exp_t::NEQ0;
 			b_neq_0->lhs = b_exp;
 			b_neq_0->rhs = std::make_shared<Exp>(0);
-			shared_ptr<AssignInst> assign_inst_ans_b = get_assign_inst(res_varid, *b_neq_0);
+			shared_ptr<AssignInst> assign_inst_ans_b = get_assign_inst(LVal::make_int(res_varid), *b_neq_0);
 			b_exp_blocks.blocks.back()->insts.push_back(assign_inst_ans_b);
 			b_exp_blocks.blocks.back()->term_inst = get_jump_inst(final_block);
 			b_exp_blocks.blocks.front()->name = "lor_f_" + lor_id;
@@ -780,7 +1007,7 @@ pair<shared_ptr<Exp>, BlockList> ast2kirt(AST::Exp &exp) {
 
 			shared_ptr<Exp> final_exp = std::make_shared<Exp>();
 			final_exp->type = exp_t::LVAL;
-			final_exp->ident = res_varid;
+			final_exp->lval = LVal::make_int(res_varid);
 			return {final_exp, res};
 		}
 		default: {

@@ -3,6 +3,7 @@
 
 #include <string>
 #include <memory>
+#include <vector>
 
 namespace AST {
 
@@ -39,6 +40,11 @@ enum class exp_t {
 	LOGICAL_OR
 };
 
+enum class lval_t {
+	VAR,
+	ARR
+};
+
 inline bool is_exp_t_unary(exp_t type) {
 	return type == exp_t::POSITIVE || type == exp_t::NEGATIVE || type == exp_t::LOGICAL_NOT;
 }
@@ -72,6 +78,7 @@ class ReturnStmt;
 class AssignStmt;
 
 class Exp;
+class InitValList;
 class LVal;
 class FuncRParam;
 
@@ -95,12 +102,14 @@ public:
 
 
 // VarDef - A variable/constant definition, can be recursive
-// My compiler does not distinguish between variable and constant
 class VarDef : public Base {
 public:
-	std::string ident;
-	std::unique_ptr<Exp> init_val;
+	std::unique_ptr<LVal> lval;
+
 	bool is_const;	// True if it is a constant (defined with `const`)
+	std::unique_ptr<Exp> init_val;	// Valid when the variable is not an array
+	std::unique_ptr<InitValList> init_val_list;	// Valid when the variable is an array
+
 	std::unique_ptr<VarDef> recur;
 
 	void print(int depth) const;
@@ -120,8 +129,7 @@ public:
 // FuncFParam: A parameter in a function definition, can be recursive
 class FuncFParam : public Base {
 public:
-	type_t type;
-	std::string ident;
+	std::unique_ptr<LVal> lval;	// Here "indices" represents the array shape
 	std::unique_ptr<FuncFParam> recur;
 
 	void print(int depth) const;
@@ -204,7 +212,9 @@ public:
 
 class LVal : public Base {
 public:
+	lval_t type;
 	std::string ident;
+	std::vector<std::unique_ptr<Exp>> indices;	// Only valid when type == ARR_REF
 
 	void print(int depth) const;
 };
@@ -219,6 +229,14 @@ public:
 	std::unique_ptr<LVal> lval;	// Only valid when type == LVAL
 	std::unique_ptr<Exp> lhs;	// Valid for binary ops
 	std::unique_ptr<Exp> rhs;	// Valid for binary ops and unary ops
+
+	void print(int depth) const;
+};
+
+// Array initialization list
+class InitValList : public Base {
+public:
+	std::vector<std::unique_ptr<Base>> items;	// Can be InitValList or Exp
 
 	void print(int depth) const;
 };
