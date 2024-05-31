@@ -111,13 +111,23 @@ list<string> kirt2str(const Program &program) {
 			res.push_back(command);
 		} else if (global_decl->type.is_arr()) {
 			assert(global_decl->type.dims() == 1);
-			string init_list_str = "{";
-			for (int i = 0; i < global_decl->arr_init_vals.size(); i++) {
-				init_list_str += std::to_string(global_decl->arr_init_vals[i]);
-				if (i + 1 < global_decl->arr_init_vals.size())
-					init_list_str += ", ";
+			string init_list_str;
+			int num_nonzero_elems = std::count_if(
+				global_decl->arr_init_vals.begin(),
+				global_decl->arr_init_vals.end(),
+				[](int x) { return x != 0; 
+			});
+			if (num_nonzero_elems > 0) {
+				init_list_str = "{";
+				for (int i = 0; i < global_decl->arr_init_vals.size(); i++) {
+					init_list_str += std::to_string(global_decl->arr_init_vals[i]);
+					if (i + 1 < global_decl->arr_init_vals.size())
+						init_list_str += ", ";
+				}
+				init_list_str += "}";
+			} else {
+				init_list_str = "zeroinit";
 			}
-			init_list_str += "}";
 			string command = format(
 				"global %s_underlying_arr = alloc [i32, %d], %s",
 				global_decl->ident.c_str(),
