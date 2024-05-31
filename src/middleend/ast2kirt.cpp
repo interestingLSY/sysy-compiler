@@ -618,7 +618,7 @@ BlockList ast2kirt(AST::BlockItem &block_item) {
 				vector<shared_ptr<Exp>> indices;
 				for (const std::unique_ptr<AST::Exp> &exp_ptr : assign_stmt->lval->indices) {
 					auto [index_exp, index_exp_blocks] = ast2kirt(*exp_ptr);
-					fill_in_empty_terminst_target(exp_blocks, index_exp_blocks.blocks.front());
+					exp_blocks.blocks.back()->term_inst = get_jump_inst(index_exp_blocks.blocks.front());
 					index_exp_blocks.blocks.front()->name = "index_" + std::to_string(block_id_counter.next());
 					indices.push_back(index_exp);
 					exp_blocks.blocks << index_exp_blocks.blocks;
@@ -770,7 +770,9 @@ BlockList ast2kirt(AST::VarDef &var_def) {
 			BlockList following_blocks = var_def.recur ? ast2kirt(*var_def.recur) : get_unit_blocklist();
 			following_blocks.blocks.front()->name = "avar_" + std::to_string(block_id_counter.next());
 
-			fill_in_empty_terminst_target(assign_insts, following_blocks.blocks.front());
+			// Recall that all blocks except the last one in a blocklist returned
+			// by a non-recursive `assign` statement should have a valid terminst
+			assign_insts.blocks.back()->term_inst = get_jump_inst(following_blocks.blocks.front());
 			assign_insts.blocks << following_blocks.blocks;
 			return assign_insts;
 		} else {
@@ -834,13 +836,13 @@ BlockList ast2kirt(AST::VarDef &var_def) {
 				assign_stmt_block_item->item = std::move(assign_stmt);
 				BlockList cur_assign_insts = ast2kirt(*assign_stmt_block_item);
 
-				fill_in_empty_terminst_target(assign_insts, cur_assign_insts.blocks.front());
+				assign_insts.blocks.back()->term_inst = get_jump_inst(cur_assign_insts.blocks.front());
 				assign_insts.blocks << cur_assign_insts.blocks;
 			}
 		}
 
 		BlockList following_blocks = var_def.recur ? ast2kirt(*var_def.recur) : get_unit_blocklist();
-		fill_in_empty_terminst_target(assign_insts, following_blocks.blocks.front());
+		assign_insts.blocks.back()->term_inst = get_jump_inst(following_blocks.blocks.front());
 		assign_insts.blocks << following_blocks.blocks;
 
 		return assign_insts;
@@ -871,7 +873,7 @@ pair<shared_ptr<Exp>, BlockList> ast2kirt(AST::Exp &exp) {
 					vector<shared_ptr<Exp>> indices;
 					for (const std::unique_ptr<AST::Exp> &exp_ptr : exp.lval->indices) {
 						auto [index_exp, index_exp_blocks] = ast2kirt(*exp_ptr);
-						fill_in_empty_terminst_target(res_blocklist, index_exp_blocks.blocks.front());
+						res_blocklist.blocks.back()->term_inst = get_jump_inst(index_exp_blocks.blocks.front());
 						index_exp_blocks.blocks.front()->name = "index_" + std::to_string(block_id_counter.next());
 						indices.push_back(index_exp);
 						res_blocklist.blocks << index_exp_blocks.blocks;
@@ -901,7 +903,7 @@ pair<shared_ptr<Exp>, BlockList> ast2kirt(AST::Exp &exp) {
 			int cur_rparam_id = 0;
 			while (cur_rparam->get()) {
 				auto [rparam_exp, rparam_exp_blocks] = ast2kirt(*(*cur_rparam)->exp);
-				fill_in_empty_terminst_target(res, rparam_exp_blocks.blocks.front());
+				res.blocks.back()->term_inst = get_jump_inst(rparam_exp_blocks.blocks.front());
 				rparam_exp_blocks.blocks.front()->name = format(
 					"func_%s_rparam_%d_%d",
 					exp.func_name.c_str(),
@@ -1018,7 +1020,6 @@ pair<shared_ptr<Exp>, BlockList> ast2kirt(AST::Exp &exp) {
 			auto [rhs_exp, rhs_exp_blocks] = ast2kirt(*exp.rhs);
 			kirt_exp->lhs = lhs_exp;
 			kirt_exp->rhs = rhs_exp;
-			rhs_exp_blocks.blocks.front()->name = "exp_" + std::to_string(block_id_counter.next());	// Just give it a random name
 			lhs_exp_blocks.blocks.back()->term_inst = get_jump_inst(rhs_exp_blocks.blocks.front());
 			lhs_exp_blocks.blocks << rhs_exp_blocks.blocks;
 			return {kirt_exp, lhs_exp_blocks};
