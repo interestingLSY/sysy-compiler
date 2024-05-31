@@ -26,45 +26,40 @@
 
 namespace KIRT {
 
+static void pass_collapse_arr(Exp &exp);
+
 static LVal collapse_lval(const LVal &lval) {
 	assert(lval.is_arr());
-	if (lval.type.dims() > 1) {
-		// Collapse this array
-		shared_ptr<Exp> final_exp = nullptr;
-		for (int dim = 0; dim < lval.indices.size(); ++dim) {
-			shared_ptr<Exp> index_exp = lval.indices[dim];
-			int cur_stride = lval.type.stride(dim);
-			if (cur_stride != 1) {
-				shared_ptr<Exp> new_index_exp = std::make_shared<Exp>();
-				new_index_exp->type = exp_t::MUL;
-				new_index_exp->lhs = std::make_shared<Exp>(cur_stride);
-				new_index_exp->rhs = index_exp;
-				index_exp = new_index_exp;
-			}
-			if (final_exp == nullptr) {
-				final_exp = index_exp;
-			} else {
-				shared_ptr<Exp> new_exp = std::make_shared<Exp>();
-				new_exp->type = exp_t::ADD;
-				new_exp->lhs = final_exp;
-				new_exp->rhs = index_exp;
-				final_exp = new_exp;
-			}
+	// Collapse this array
+	shared_ptr<Exp> final_exp = nullptr;
+	for (int dim = 0; dim < lval.indices.size(); ++dim) {
+		shared_ptr<Exp> index_exp = lval.indices[dim];
+		int cur_stride = lval.type.stride(dim);
+		if (cur_stride != 1) {
+			shared_ptr<Exp> new_index_exp = std::make_shared<Exp>();
+			new_index_exp->type = exp_t::MUL;
+			new_index_exp->lhs = std::make_shared<Exp>(cur_stride);
+			new_index_exp->rhs = index_exp;
+			index_exp = new_index_exp;
 		}
-		if (!final_exp) {
-			// No indices found. This is a pointer to the first element
-			// Forge a 0 index
-			final_exp = std::make_shared<Exp>(0);
+		if (final_exp == nullptr) {
+			final_exp = index_exp;
+		} else {
+			shared_ptr<Exp> new_exp = std::make_shared<Exp>();
+			new_exp->type = exp_t::ADD;
+			new_exp->lhs = final_exp;
+			new_exp->rhs = index_exp;
+			final_exp = new_exp;
 		}
-		LVal new_lval = LVal::make_arr(lval.ident, {lval.type.numel()}, {final_exp});
-		return new_lval;
-	} else {
-		if (lval.indices.size() == 0) {
-			// This is a pointer to the first element
-			return LVal::make_arr(lval.ident, {lval.type.numel()}, {std::make_shared<Exp>(0)});
-		}
-		return lval;
 	}
+	if (!final_exp) {
+		// No indices found. This is a pointer to the first element
+		// Forge a 0 index
+		final_exp = std::make_shared<Exp>(0);
+	}
+	pass_collapse_arr(*final_exp);
+	LVal new_lval = LVal::make_arr(lval.ident, {lval.type.numel()}, {final_exp});
+	return new_lval;
 }
 
 static void pass_collapse_arr(Exp &exp) {
@@ -88,7 +83,7 @@ static void pass_collapse_arr(Exp &exp) {
 		pass_collapse_arr(*exp.lhs);
 	if (exp.rhs)
 		pass_collapse_arr(*exp.rhs);
-	if (exp.args.size())
+	if (!exp.args.empty())
 		for (auto &arg : exp.args)
 			pass_collapse_arr(*arg);
 }

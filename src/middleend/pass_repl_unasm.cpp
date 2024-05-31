@@ -12,10 +12,13 @@ static void pass_repl_unasm(Exp &exp) {
 		pass_repl_unasm(*exp.lhs);
 	if (exp.rhs)
 		pass_repl_unasm(*exp.rhs);
-	if (exp.args.size())
+	if (!exp.args.empty())
 		for (auto &arg : exp.args)
 			pass_repl_unasm(*arg);
-
+	if (!exp.lval.indices.empty())
+		for (auto &index : exp.lval.indices)
+			pass_repl_unasm(*index);
+			
 	auto is_zero = [](const Exp &exp) {
 		return exp.type == exp_t::NUMBER && exp.number == 0;
 	};
