@@ -5,5 +5,5 @@ add_library(
 	kirt2strkir.cpp
 	pass_collapse_arr.cpp
 	pass_repl_unasm.cpp
-	pass_fill_block_name.cpp
+	pass_fill_block_id_name.cpp
 )

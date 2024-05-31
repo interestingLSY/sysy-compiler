@@ -4,6 +4,6 @@
 
 namespace KIRT {
 
-void pass_fill_block_name(Program &prog);
+void pass_fill_block_id_name(Program &prog);
 
 }

@@ -194,7 +194,8 @@ public:
 // Each basic block contains zero or more instructions, and one terminal instruction
 class Block {
 public:
-	string name;
+	int id;			// Id. Unique within each function
+	string name;	// An optional name. Will be generated automatically if not provided
 	list<std::shared_ptr<Inst>> insts;
 	std::shared_ptr<TermInst> term_inst;
 };
@@ -209,7 +210,6 @@ public:
 //  [1] It has a terminal instruction
 //  [2] The target block of the terminal instruction is not nullptr
 //  [3] The block contains all the instructions it should have
-//  [4] Has a meaningful, non-empty name
 // 
 // Most structures in AST, e.g. block and block_item, are converted to BlockList.
 // Compared to full blocks, this blocklist may contain incomplete blocks. In
@@ -223,7 +223,6 @@ public:
 // 		all blocks except the last one contains a complete terminal instruction,
 // 		while the last block has a JumpInst with target = nullptr
 //  [3] The first block, and only the first block, may not satisfy [3]
-//  [4] The first block, and only the first block, may not satisfy [4]
 // Besides, the returned block list must contain at least one block.
 // 
 // # Block Naming

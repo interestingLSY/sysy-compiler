@@ -10,7 +10,8 @@
 #include "middleend/kirt2strkir.h"
 #include "middleend/pass_repl_unasm.h"
 #include "middleend/pass_collapse_arr.h"
-#include "middleend/pass_fill_block_name.h"
+#include "middleend/pass_fill_block_id_name.h"
+#include "optim/pass_block_fusion.h"
 #include "backend/kirt2asm.h"
 
 extern FILE *yyin;
@@ -79,7 +80,10 @@ int main(int argc, const char *argv[]) {
   KIRT::pass_collapse_arr(kirt);
 
   fprintf(stderr, "Running pass: fill block names...\n");
-  KIRT::pass_fill_block_name(kirt);
+  KIRT::pass_fill_block_id_name(kirt);
+
+  fprintf(stderr, "Running pass: block fusion...\n");
+  KIRT::pass_block_fusion(kirt);
 
   // Print KIR
   fprintf(stderr, "Converting KIRT to string...\n");
