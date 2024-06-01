@@ -630,6 +630,10 @@ list<string> kirt2asm(const KIRT::Function &func) {
 }
 
 void kirt2asm(const KIRT::Block &block) {
+	if (!cur_func_asm.empty() && cur_func_asm.back() == "  j " + rename_block(block.name)) {
+		// Peephole optimization: remove the last jump instruction
+		cur_func_asm.pop_back();
+	}
 	PUSH_ASM("%s:", rename_block(block.name).c_str());
 
 	for (const shared_ptr<KIRT::Inst> &inst : block.insts) {
