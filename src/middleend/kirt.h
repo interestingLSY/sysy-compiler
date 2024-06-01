@@ -81,7 +81,9 @@ enum class exp_t {
 	FUNC_CALL,
 
 	ARR_ADDR,
-	ADDR_ADD,
+	ADDR_ADD,	// Used when performing pointer arithmetic. We need this since
+				// we cannot use `add` to add a pointer and an integer in Koopa
+				// IR. When generating ASM, `addr_add` and `add` are equivalent
 
 	// POSITIVE won't appear in the final AST
 	// NEGATIVE will be converted to SUB

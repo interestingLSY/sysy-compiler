@@ -1,5 +1,6 @@
 // Pass Collapse Array: Collapse multi-dimensional array to one-dimensional array,
-// and convert pointer arithmetics to addition.
+// and convert pointer arithmetics to addition. Besides, in this step, all
+// offsets will be multiplied by `sizeof(int)` (4)
 // 
 // After this conversion, an LVAL will have three types:
 // 
@@ -34,7 +35,7 @@ static LVal collapse_lval(const LVal &lval) {
 	shared_ptr<Exp> final_exp = nullptr;
 	for (int dim = 0; dim < lval.indices.size(); ++dim) {
 		shared_ptr<Exp> index_exp = lval.indices[dim];
-		int cur_stride = lval.type.stride(dim);
+		int cur_stride = lval.type.stride(dim)*4;
 		if (cur_stride != 1) {
 			shared_ptr<Exp> new_index_exp = std::make_shared<Exp>();
 			new_index_exp->type = exp_t::MUL;
@@ -75,7 +76,7 @@ static void pass_collapse_arr(Exp &exp) {
 				exp.lhs = std::make_shared<Exp>();
 				exp.lhs->type = exp_t::ARR_ADDR;
 				exp.lhs->arr_name = new_lval.ident;
-				exp.rhs = new_lval.indices[0];	// TODO mul 4
+				exp.rhs = new_lval.indices[0];
 			}
 		}
 	}

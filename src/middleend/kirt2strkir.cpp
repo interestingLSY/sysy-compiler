@@ -18,7 +18,7 @@ Counter temp_reg_cnter;
 static string kirt_exp_t2str(exp_t type) {
 	switch (type) {
 		case exp_t::ADDR_ADD:
-			return "getptr";
+			assert(0);	// Should be processed separately since we need to divide the offset by 4
 		case exp_t::ADD:
 			return "add";
 		case exp_t::SUB:
@@ -328,12 +328,19 @@ list<string> kirt2str(const AssignInst &assign_inst) {
 		my_assert(27, assign_inst.lval.indices.size() == 1);
 		auto [lval_exp_inst_list, lval_exp_coid] = kirt2str(*assign_inst.lval.indices[0]);
 		res << lval_exp_inst_list;
+		// Divide the offset by 4 (sizeof(int))
+		string lval_exp_div4_coid = "%" + std::to_string(temp_reg_cnter.next());
+		res.push_back(format(
+			"  %s = sar %s, 2",
+			lval_exp_div4_coid.c_str(),
+			lval_exp_coid.c_str()
+		));
 		int ptr_id = temp_reg_cnter.next();
 		res.push_back(format(
 			"  %%ptr_%d = getptr %s, %s",
 			ptr_id,
 			assign_inst.lval.ident.c_str(),
-			lval_exp_coid.c_str()
+			lval_exp_div4_coid.c_str()
 		));
 		res.push_back(format(
 			"  store %s, %%ptr_%d",
@@ -370,12 +377,18 @@ pair<list<string>, string> kirt2str(const Exp &exp) {
 			my_assert(29, exp.lval.indices.size() == 1);
 			auto [lval_exp_inst_list, lval_exp_coid] = kirt2str(*exp.lval.indices[0]);
 			load_insts << lval_exp_inst_list;
+			string lval_exp_div4_coid = "%" + std::to_string(temp_reg_cnter.next());
+			load_insts.push_back(format(
+				"  %s = sar %s, 2",
+				lval_exp_div4_coid.c_str(),
+				lval_exp_coid.c_str()
+			));
 			int ptr_id = temp_reg_cnter.next();
 			load_insts.push_back(format(
 				"  %%ptr_%d = getptr %s, %s",
 				ptr_id,
 				exp.lval.ident.c_str(),
-				lval_exp_coid.c_str()
+				lval_exp_div4_coid.c_str()
 			));
 			load_insts.push_back(format(
 				"  %s = load %%ptr_%d",
@@ -435,6 +448,28 @@ pair<list<string>, string> kirt2str(const Exp &exp) {
 			lhs_coid +
 			", 0"
 		);
+		return {res, res_coid};
+	} else if (exp.type == exp_t::ADDR_ADD) {
+		assert (exp.lhs);
+		assert (exp.rhs);
+		auto [lhs_inst_list, lhs_coid] = kirt2str(*exp.lhs);
+		auto [rhs_inst_list, rhs_coid] = kirt2str(*exp.rhs);
+		list<string> res;
+		res << lhs_inst_list;
+		res << rhs_inst_list;
+		string res_coid = "%" + std::to_string(temp_reg_cnter.next());
+		string rhs_div4_coid = "%" + std::to_string(temp_reg_cnter.next());
+		res.push_back(format(
+			"  %s = sar %s, 2",
+			rhs_div4_coid.c_str(),
+			rhs_coid.c_str()
+		));
+		res.push_back(format(
+			"  %s = getptr %s, %s",
+			res_coid.c_str(),
+			lhs_coid.c_str(),
+			rhs_div4_coid.c_str()
+		));
 		return {res, res_coid};
 	} else {
 		assert (exp.lhs);
