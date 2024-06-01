@@ -665,6 +665,62 @@ list<string> kirt2asm(const KIRT::Program &prog) {
 	return res;
 }
 
+// A tiny utility for collecting all used global variables in a function
+std::unordered_set<string> cur_func_used_global_idents;
+void traverse_used_global_idents(const KIRT::Exp &exp);
+void traverse_used_global_idents(const KIRT::LVal &lval) {
+	if (KIRT::global_decl_map.count(lval.ident)) {
+		cur_func_used_global_idents.insert(lval.ident);
+	}
+	for (const std::shared_ptr<KIRT::Exp> &exp : lval.indices) {
+		traverse_used_global_idents(*exp);
+	}
+}
+void traverse_used_global_idents(const KIRT::Exp &exp) {
+	if (exp.type == KIRT::exp_t::LVAL) {
+		traverse_used_global_idents(exp.lval);
+	}
+	if (exp.type == KIRT::exp_t::ARR_ADDR) {
+		if (KIRT::global_decl_map.count(exp.arr_name)) {
+			cur_func_used_global_idents.insert(exp.arr_name);
+		}
+	}
+	for (const std::shared_ptr<KIRT::Exp> &arg : exp.args) {
+		traverse_used_global_idents(*arg);
+	}
+	if (exp.lhs) {
+		traverse_used_global_idents(*exp.lhs);
+	}
+	if (exp.rhs) {
+		traverse_used_global_idents(*exp.rhs);
+	}
+}
+void traverse_used_global_idents(const KIRT::Function &func) {
+	for (const auto &block : func.blocks.blocks) {
+		for(const auto &inst : block->insts) {
+			if (const KIRT::AssignInst *assign_inst = dynamic_cast<const KIRT::AssignInst *>(inst.get())) {
+				traverse_used_global_idents(assign_inst->exp);
+				traverse_used_global_idents(assign_inst->lval);
+			} else if (const KIRT::ExpInst *exp_inst = dynamic_cast<const KIRT::ExpInst *>(inst.get())) {
+				traverse_used_global_idents(exp_inst->exp);
+			} else {
+				my_assert(12, 0);
+			}
+		}
+		if (const KIRT::BranchInst *branch_inst = dynamic_cast<const KIRT::BranchInst *>(block->term_inst.get())) {
+			traverse_used_global_idents(branch_inst->cond);
+		} else if (const KIRT::JumpInst *jump_inst = dynamic_cast<const KIRT::JumpInst *>(block->term_inst.get())) {
+			// Do nothing
+		} else if (const KIRT::ReturnInst *return_inst = dynamic_cast<const KIRT::ReturnInst *>(block->term_inst.get())) {
+			if (return_inst->ret_exp) {
+				traverse_used_global_idents(*return_inst->ret_exp);
+			}
+		} else {
+			my_assert(13, 0);
+		}
+	}
+}
+
 list<string> kirt2asm(const KIRT::Function &func) {
 	cur_func_name = func.name;
 	cur_func_asm.clear();
@@ -686,8 +742,10 @@ list<string> kirt2asm(const KIRT::Function &func) {
 	}
 
 	// Global variable registration
-	for (const auto &[ident, global_decl] : KIRT::global_decl_map) {
-		var_manager.register_global_var_or_arr(*global_decl);
+	cur_func_used_global_idents.clear();
+	traverse_used_global_idents(func);
+	for (const string &global_ident : cur_func_used_global_idents) {
+		var_manager.register_global_var_or_arr(*KIRT::global_decl_map[global_ident]);
 	}
 
 	// Local variable registration
