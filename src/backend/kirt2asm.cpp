@@ -135,7 +135,7 @@ public:
 		_register_var(arr_addr_var_ident);
 		int offset = _register_local_arr(local_arr.ident, local_arr.type.numel());
 		// Write down the address of the array
-		string arr_addr_reg = load_var_to_reg(arr_addr_var_ident);
+		string arr_addr_reg = alloc_reg_for_var(arr_addr_var_ident);
 		PUSH_ASM("  li %s, %d", arr_addr_reg.c_str(), -offset*4);
 		PUSH_ASM("  add %s, sp, %s", arr_addr_reg.c_str(), arr_addr_reg.c_str());
 		store_var_from_reg(arr_addr_var_ident, arr_addr_reg);
@@ -170,9 +170,9 @@ public:
 		have_allocated_idle_reg = false;
 	}
 
-	// Load the value of one variable to a register
+	// Allocate a register for a variable (without loading the value)
 	// if hold_reg is not empty, then that register won't be used
-	string load_var_to_reg(
+	string alloc_reg_for_var(
 		const string &ident,
 		const std::optional<string> &hold_reg1 = std::nullopt,
 		const std::optional<string> &hold_reg2 = std::nullopt
@@ -184,6 +184,21 @@ public:
 		if (hold_reg1.has_value()) hold_mask |= hold_reg1.value() == "t0" ? 1 : hold_reg1.value() == "t1" ? 2 : 0;
 		if (hold_reg2.has_value()) hold_mask |= hold_reg2.value() == "t0" ? 1 : hold_reg2.value() == "t1" ? 2 : 0;
 		const char* final_reg = (hold_mask&1) == 0 ? "t0" : (hold_mask&2) == 0 ? "t1" : "t2";
+		return final_reg;
+	}
+
+	// Load the value of one variable to a register
+	// if hold_reg is not empty, then that register won't be used
+	string load_var_to_reg(
+		const string &ident,
+		const std::optional<string> &hold_reg1 = std::nullopt,
+		const std::optional<string> &hold_reg2 = std::nullopt
+	) {
+		if (ident == "0") {
+			return "x0";
+		}
+		string final_reg_string = alloc_reg_for_var(ident, hold_reg1, hold_reg2);
+		const char* final_reg = final_reg_string.c_str();
 		if (KIRT::global_decl_map.count(ident)) {
 			// A global variable
 			PUSH_ASM("  la %s, %s", final_reg, ident.substr(1).c_str());
@@ -490,7 +505,7 @@ string kirt2asm(const KIRT::Exp &exp) {
 			string arr_addr_reg = var_manager.load_arr_addr_to_reg(exp.lval.ident, index_reg);
 
 			string res_virt_ident = var_manager.register_temp_var();
-			string res_reg = var_manager.load_var_to_reg(res_virt_ident, index_reg, arr_addr_reg);
+			string res_reg = var_manager.alloc_reg_for_var(res_virt_ident, index_reg, arr_addr_reg);
 			PUSH_ASM("  add %s, %s, %s", res_reg.c_str(), index_reg.c_str(), arr_addr_reg.c_str());
 			PUSH_ASM("  lw %s, 0(%s)", res_reg.c_str(), res_reg.c_str());
 			var_manager.store_var_from_reg(res_virt_ident, res_reg);
@@ -514,7 +529,7 @@ string kirt2asm(const KIRT::Exp &exp) {
 		// Caution: make sure code after reading `stack_frame_len_var_ident` use
 		// no more stack frame space
 		string stack_frame_len_var_ident = var_manager.register_temp_var();
-		string stack_frame_len_reg = var_manager.load_var_to_reg(stack_frame_len_var_ident);
+		string stack_frame_len_reg = var_manager.alloc_reg_for_var(stack_frame_len_var_ident);
 		int num_stack_elems = var_manager.get_cur_num_stack_elems() + 1;	// +1 since we want to store the frame len to the stack
 		int stack_frame_len = num_stack_elems*4; 
 		PUSH_ASM("  li %s, %d", stack_frame_len_reg.c_str(), stack_frame_len);
@@ -599,7 +614,7 @@ string kirt2asm(const KIRT::Exp &exp) {
 	} else {
 		string res_virt_ident = var_manager.register_temp_var();
 		if (exp.type == KIRT::exp_t::NUMBER) {
-			string res_reg = var_manager.load_var_to_reg(res_virt_ident, std::nullopt);
+			string res_reg = var_manager.alloc_reg_for_var(res_virt_ident, std::nullopt);
 			PUSH_ASM("  li %s, %d", res_reg.c_str(), exp.number);
 			var_manager.store_var_from_reg(res_virt_ident, res_reg);
 			return res_virt_ident;
@@ -614,7 +629,7 @@ string kirt2asm(const KIRT::Exp &exp) {
 		} else if (exp.type == KIRT::exp_t::EQ0 || exp.type == KIRT::exp_t::NEQ0) {
 			string lhs_virt_ident = kirt2asm(*exp.lhs);
 			string lhs_reg = var_manager.load_var_to_reg(lhs_virt_ident, std::nullopt);
-			string res_reg = var_manager.load_var_to_reg(res_virt_ident, lhs_reg);
+			string res_reg = var_manager.alloc_reg_for_var(res_virt_ident, lhs_reg);
 
 			PUSH_ASM(
 				"  %s %s, %s",
@@ -630,7 +645,7 @@ string kirt2asm(const KIRT::Exp &exp) {
 			auto rhs_virt_ident = kirt2asm(*exp.rhs);
 			string lhs_reg = var_manager.load_var_to_reg(lhs_virt_ident, std::nullopt);
 			string rhs_reg = var_manager.load_var_to_reg(rhs_virt_ident, lhs_reg);
-			string res_reg = var_manager.load_var_to_reg(res_virt_ident, lhs_reg, rhs_reg);
+			string res_reg = var_manager.alloc_reg_for_var(res_virt_ident, lhs_reg, rhs_reg);
 
 			PUSH_ASM(
 				"  %s %s, %s, %s",
