@@ -762,7 +762,7 @@ string kirt2asm(const KIRT::Exp &exp) {
 		// Advance SP
 		// Caution: make sure code after reading `stack_frame_len_var_ident` use
 		// no more stack frame space
-		int num_stack_elems = var_manager.get_cur_num_stack_elems() + 10;	// +10 since we want to store the frame len to the stack and we need another temp var
+		int num_stack_elems = var_manager.get_cur_num_stack_elems();
 		int stack_frame_len = num_stack_elems*4; 
 
 		// Place args
@@ -812,11 +812,12 @@ string kirt2asm(const KIRT::Exp &exp) {
 		// Save vars (evict all caller-saved regs and global vars)
 		var_manager.on_function_call();
 
-		{
-			string stack_frame_len_reg = "t0";	// This is fine since all caller-saved regs have been invalidated
-			PUSH_ASM("  li %s, %d", stack_frame_len_reg.c_str(), stack_frame_len);
-			PUSH_ASM("  sub sp, sp, %s", stack_frame_len_reg.c_str());
-			PUSH_ASM("  sw %s, 0(sp)", stack_frame_len_reg.c_str());
+		if (stack_frame_len > 2048) {
+			// Here using t0 is fine since all caller-saved regs have been invalidated
+			PUSH_ASM("  li t0, %d", stack_frame_len);
+			PUSH_ASM("  sub sp, sp, t0");
+		} else {
+			PUSH_ASM("  addi sp, sp, -%d", stack_frame_len);
 		}
 
 		// Adjust SP
@@ -842,10 +843,11 @@ string kirt2asm(const KIRT::Exp &exp) {
 		}
 
 		// Step-back SP
-		{
-			string stack_frame_len_reg = "t0";
-			PUSH_ASM("  lw %s, 0(sp)", stack_frame_len_reg.c_str());
-			PUSH_ASM("  add sp, sp, %s", stack_frame_len_reg.c_str());
+		if (stack_frame_len > 2047) {
+			PUSH_ASM("  li t0, %d", stack_frame_len);
+			PUSH_ASM("  add sp, sp, t0");
+		} else {
+			PUSH_ASM("  addi sp, sp, %d", stack_frame_len);
 		}
 
 		// Save the return value
