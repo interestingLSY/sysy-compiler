@@ -113,12 +113,8 @@ public:
 			my_assert(34, offset*4 <= 2047);
 			PUSH_ASM("  sw a%d, %d(sp)", kth, -offset*4);
 		} else {
-			PUSH_ASM("  li t0, %d", 4*(kth-8));
-			PUSH_ASM("  add t0, sp, t0");
-			PUSH_ASM("  lw t1, 0(t0)");
-			PUSH_ASM("  li t0, %d", -offset*4);
-			PUSH_ASM("  add t0, sp, t0");
-			PUSH_ASM("  sw t1, 0(t0)");
+			PUSH_ASM("  lw t1, %d(sp)", 4*(kth-8));
+			PUSH_ASM("  sw t1, %d(sp)", -offset*4);
 		}
 	}
 
@@ -206,9 +202,13 @@ public:
 		} else if (local_var_meta_db.count(ident)) {
 			// A local variable
 			VarMeta& meta = local_var_meta_db[ident];
-			PUSH_ASM("  li %s, %d", final_reg, -meta.offset*4);
-			PUSH_ASM("  add %s, sp, %s", final_reg, final_reg);
-			PUSH_ASM("  lw %s, 0(%s)", final_reg, final_reg);
+			if (-2048 <= -meta.offset*4 && -meta.offset*4 < 2048) {
+				PUSH_ASM("  lw %s, %d(sp)", final_reg, -meta.offset*4);
+			} else {
+				PUSH_ASM("  li %s, %d", final_reg, -meta.offset*4);
+				PUSH_ASM("  add %s, sp, %s", final_reg, final_reg);
+				PUSH_ASM("  lw %s, 0(%s)", final_reg, final_reg);
+			}
 		} else {
 			// Variable not found
 			my_assert(32, false);
@@ -228,9 +228,13 @@ public:
 		} else if (local_var_meta_db.count(ident)) {
 			// A local variable
 			VarMeta& meta = local_var_meta_db[ident];
-			PUSH_ASM("  li %s, %d", temp_reg, -meta.offset*4);
-			PUSH_ASM("  add %s, sp, %s", temp_reg, temp_reg);
-			PUSH_ASM("  sw %s, 0(%s)", reg.c_str(), temp_reg);
+			if (-2048 <= -meta.offset*4 && -meta.offset*4 < 2048) {
+				PUSH_ASM("  sw %s, %d(sp)", reg.c_str(), -meta.offset*4);
+			} else {
+				PUSH_ASM("  li %s, %d", temp_reg, -meta.offset*4);
+				PUSH_ASM("  add %s, sp, %s", temp_reg, temp_reg);
+				PUSH_ASM("  sw %s, 0(%s)", reg.c_str(), temp_reg);
+			}
 		} else {
 			// Variable not found
 			my_assert(32, false);
