@@ -25,7 +25,6 @@ using std::pair;
 //	@<original_name>_lv<level>
 // Each time we enter a new scope, we increment the level. When we leave the
 // scope, we decrement the level.
-// TODO This renamer is inefficient. Redesign the algorithm
 //
 // For constant management, we promise that, the identifier of a constant shoud
 // never appear in the KIRT. When we encounter a constant definition, we store
