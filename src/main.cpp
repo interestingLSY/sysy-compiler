@@ -50,6 +50,8 @@ int main(int argc, const char *argv[]) {
     print_ast = true;
     print_ir = true;
     print_asm = true;
+  } else if (mode == "-perf") {
+    print_asm = true;
   } else {
     std::cerr << "Invalid mode: " << mode << std::endl;
     assert(false);
