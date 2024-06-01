@@ -289,15 +289,16 @@ public:
 	}
 
 	// Called when exiting from a blocktemp 
-	void on_exit_block() {
+	// Ignore `ignore_reg` if provided (useful for generating branching instructions)
+	void on_exit_block(const optional<string> &ignore_reg = nullopt) {
 		// Evict all vars
 		for (const string &reg : all_caller_saved_regs) {
-			if (reg2var.count(reg)) {
+			if (reg2var.count(reg) && (!ignore_reg.has_value() || reg != ignore_reg.value())) {
 				evict_reg(reg);
 			}
 		}
 		for (const string &reg : all_callee_saved_regs) {
-			if (reg2var.count(reg)) {
+			if (reg2var.count(reg) && (!ignore_reg.has_value() || reg != ignore_reg.value())){
 				evict_reg(reg);
 			}
 		}
@@ -328,6 +329,7 @@ public:
 			// TODO Indeed now this param is displayed by register aX. Write
 			// that info into the library
 		} else {
+			manually_evict_reg("t1");
 			PUSH_ASM("  lw t1, %d(sp)", 4*(kth-8));
 			PUSH_ASM("  sw t1, %d(sp)", -offset*4);
 		}
@@ -696,12 +698,13 @@ void kirt2asm(const shared_ptr<KIRT::TermInst> &inst) {
 		// bnez to jump. This can be optimized
 		// TODO Now we always jump to the false block, via `j %s`. In the future we may
 		// get rid of this jump via BlockReorderPass
-		var_manager.on_exit_block();
+		var_manager.on_exit_block(cond_reg);
 		PUSH_ASM(
 			"  bnez %s, %s",
 			cond_reg.c_str(),
 			rename_block(branch_inst->true_block->name).c_str()
 		);
+		var_manager.release_var_if_temp(cond_var_ident);
 		PUSH_ASM(
 			"  j %s",
 			rename_block(branch_inst->false_block->name).c_str()
