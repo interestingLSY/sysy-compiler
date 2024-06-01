@@ -978,20 +978,13 @@ string kirt2asm(const KIRT::Exp &exp) {
 		// Save vars (evict all caller-saved regs and global vars)
 		var_manager.on_function_call();
 
-		if (stack_frame_len > 2048) {
+		int sp_adjust = stack_frame_len + (num_args > 8 ? (num_args-8)*4 : 0);
+		if (sp_adjust > 2048) {
 			// Here using t0 is fine since all caller-saved regs have been invalidated
-			PUSH_ASM("  li t0, %d", stack_frame_len);
+			PUSH_ASM("  li t0, %d", sp_adjust);
 			PUSH_ASM("  sub sp, sp, t0");
 		} else {
-			PUSH_ASM("  addi sp, sp, -%d", stack_frame_len);
-		}
-
-		// Adjust SP
-		if (num_args > 8) {
-			PUSH_ASM(
-				"  addi sp, sp, -%d",
-				(num_args-8)*4
-			);
+			PUSH_ASM("  addi sp, sp, -%d", sp_adjust);
 		}
 
 		// Call
@@ -1000,20 +993,14 @@ string kirt2asm(const KIRT::Exp &exp) {
 			exp.func_name.c_str()
 		);
 
-		// Restore SP
-		if (num_args > 8) {
-			PUSH_ASM(
-				"  addi sp, sp, %d",
-				(num_args-8)*4
-			);
-		}
-
 		// Step-back SP
-		if (stack_frame_len > 2047) {
-			PUSH_ASM("  li t0, %d", stack_frame_len);
-			PUSH_ASM("  add sp, sp, t0");
+		if (sp_adjust > 2048) {
+			// Here we load -sp_adjust and use `sub` to get better performance
+			// when sp_adjust == 2048
+			PUSH_ASM("  li t0, %d", -sp_adjust);
+			PUSH_ASM("  sub sp, sp, t0");
 		} else {
-			PUSH_ASM("  addi sp, sp, %d", stack_frame_len);
+			PUSH_ASM("  addi sp, sp, %d", sp_adjust);
 		}
 
 		// Save the return value
