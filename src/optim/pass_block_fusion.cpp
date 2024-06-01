@@ -99,7 +99,7 @@ static void pass_block_fusion(Function &func) {
 	}
 	func.blocks.blocks = new_blocks;
 
-	fprintf(stderr, "Function %s: %d -> %lu (%.3f%%)\n",
+	fprintf(stderr, "Function `%s`: %d -> %lu (%.1f%%)\n",
 			func.name.c_str(), num_blocks, func.blocks.blocks.size(),
 			100.0 * func.blocks.blocks.size() / num_blocks);
 }

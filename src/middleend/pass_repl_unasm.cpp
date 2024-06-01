@@ -86,6 +86,10 @@ static void pass_repl_unasm(Exp &exp) {
 static void pass_repl_unasm(shared_ptr<Inst> &inst) {
 	if (auto assign_inst = dynamic_cast<AssignInst *>(inst.get())) {
 		pass_repl_unasm(assign_inst->exp);
+		if (!assign_inst->lval.indices.empty()) {
+			for (auto &index : assign_inst->lval.indices)
+				pass_repl_unasm(*index);
+		}
 	} else if (auto exp_inst = dynamic_cast<ExpInst *>(inst.get())) {
 		pass_repl_unasm(exp_inst->exp);
 	} else {

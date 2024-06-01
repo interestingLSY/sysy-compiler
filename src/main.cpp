@@ -12,6 +12,7 @@
 #include "middleend/pass_collapse_arr.h"
 #include "middleend/pass_fill_block_id_name.h"
 #include "optim/pass_block_fusion.h"
+#include "optim/pass_optim_exp_op.h"
 #include "backend/kirt2asm.h"
 
 extern FILE *yyin;
@@ -75,17 +76,18 @@ int main(int argc, const char *argv[]) {
   fprintf(stderr, "Generating KIRT...\n");
   KIRT::Program kirt = KIRT::ast2kirt(*static_cast<AST::CompUnit *>(ast.get()));
 
-  fprintf(stderr, "Running pass: replace unasmable instructions...\n");
+  // fprintf(stderr, "Running pass: replace unasmable instructions...\n");
   KIRT::pass_repl_unasm(kirt);
 
-  fprintf(stderr, "Running pass: collapse arrays...\n");
+  // fprintf(stderr, "Running pass: collapse arrays...\n");
   KIRT::pass_collapse_arr(kirt);
 
-  fprintf(stderr, "Running pass: fill block names...\n");
+  // fprintf(stderr, "Running pass: fill block names...\n");
   KIRT::pass_fill_block_id_name(kirt);
 
-  fprintf(stderr, "Running pass: block fusion...\n");
   KIRT::pass_block_fusion(kirt);
+
+  KIRT::pass_optim_exp_op(kirt);
 
   // Print KIR
   fprintf(stderr, "Converting KIRT to string...\n");
