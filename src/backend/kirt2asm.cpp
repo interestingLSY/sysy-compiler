@@ -125,10 +125,10 @@ private:
 	// Simply load a variable to a register
 	void load_var_to_reg_simple(const string &ident, const string &target_reg_string) {
 		const char* target_reg = target_reg_string.c_str();
-		// if (ident == "0") {
-		// 	PUSH_ASM("  li %s, 0", target_reg);
-		// 	return;
-		// }
+		if (ident == "0") {
+			PUSH_ASM("  li %s, 0", target_reg);
+			return;
+		}
 		VarMeta &meta = var_meta_db[ident];
 		if (meta.type == var_t::GLOBAL_VAR) {
 			// A global variable
@@ -156,7 +156,6 @@ private:
 	// Simply store a variable from a register
 	// If a temp register is needed but not provided, return false
 	bool store_var_from_reg_simple_helper(const string &ident, const string &reg, const optional<string> &temp_reg_string = nullopt) {
-		my_assert(34, ident != "0");
 		const char* temp_reg = temp_reg_string.has_value() ? temp_reg_string.value().c_str() : nullptr;
 		VarMeta& meta = var_meta_db[ident];
 		if (meta.type == var_t::GLOBAL_VAR) {
@@ -185,6 +184,7 @@ private:
 		}
 	}
 	void store_var_from_reg_simple(const string &ident, const string &reg) {
+		my_assert(34, ident != "0");
 		bool is_success = store_var_from_reg_simple_helper(ident, reg);
 		if (!is_success) {
 			// Must provide a temp register
@@ -396,6 +396,9 @@ public:
 		const std::optional<string> &hold_reg1 = std::nullopt,
 		const std::optional<string> &hold_reg2 = std::nullopt
 	) {
+		if (ident == "0") {
+			return "x0";
+		}
 		assert (var_meta_db.count(ident));
 		VarMeta &meta = var_meta_db[ident];
 		if (!meta.corresp_reg.has_value()) {
@@ -416,6 +419,9 @@ public:
 		const std::optional<string> &hold_reg1 = std::nullopt,
 		const std::optional<string> &hold_reg2 = std::nullopt
 	) {
+		if (ident == "0") {
+			return "x0";
+		}
 		assert (var_meta_db.count(ident));
 		VarMeta &meta = var_meta_db[ident];
 		if (!meta.corresp_reg.has_value()) {
@@ -426,6 +432,7 @@ public:
 	}
 
 	void on_store(const string &ident) {
+		assert(var_meta_db.count(ident));
 		VarMeta &meta = var_meta_db[ident];
 		meta.is_dirty = true;
 		meta.last_use_timestamp = cur_timestamp_cnter.next();
@@ -846,54 +853,49 @@ string kirt2asm(const KIRT::Exp &exp) {
 		return res_virt_ident;
 	} else if (exp.type == KIRT::exp_t::ARR_ADDR) {
 		return exp.arr_name+"#addr";
-	} else {
-		string res_virt_ident = var_manager.register_temp_var();
-		if (exp.type == KIRT::exp_t::NUMBER) {
-			string res_reg = var_manager.stage_var(res_virt_ident);
-			PUSH_ASM("  li %s, %d", res_reg.c_str(), exp.number);
-			var_manager.on_store(res_virt_ident);
-			return res_virt_ident;
-			// TODO Optimize for zero
-			// if (exp.number != 0) {
-			// 	var_manager.store_local_var_from_int(res_virt_ident, exp.number);
-			// 	return res_virt_ident;
-			// } else {
-			// 	var_manager.release_var_if_temp(res_virt_ident);
-			// 	return "0";
-			// }
-		} else if (exp.type == KIRT::exp_t::EQ0 || exp.type == KIRT::exp_t::NEQ0) {
-			string lhs_virt_ident = kirt2asm(*exp.lhs);
-			string lhs_reg = var_manager.stage_and_load_var(lhs_virt_ident);
-			string res_reg = var_manager.stage_var(res_virt_ident, lhs_reg);
-
-			PUSH_ASM(
-				"  %s %s, %s",
-				exp.type == KIRT::exp_t::EQ0 ? "seqz" : "snez",
-				res_reg.c_str(),
-				lhs_reg.c_str()
-			);
-			var_manager.on_store(res_virt_ident);
-			var_manager.release_var_if_temp(lhs_virt_ident);
-			return res_virt_ident;
-		} else {
-			auto lhs_virt_ident = kirt2asm(*exp.lhs);
-			auto rhs_virt_ident = kirt2asm(*exp.rhs);
-			string lhs_reg = var_manager.stage_and_load_var(lhs_virt_ident);
-			string rhs_reg = var_manager.stage_and_load_var(rhs_virt_ident, lhs_reg);
-			string res_reg = var_manager.stage_var(res_virt_ident, lhs_reg, rhs_reg);
-
-			PUSH_ASM(
-				"  %s %s, %s, %s",
-				kirt_exp_t2asm(exp.type).c_str(),
-				res_reg.c_str(),
-				lhs_reg.c_str(),
-				rhs_reg.c_str()
-			);
-			var_manager.on_store(res_virt_ident);
-			var_manager.release_var_if_temp(lhs_virt_ident);
-			var_manager.release_var_if_temp(rhs_virt_ident);
-			return res_virt_ident;
+	} else if (exp.type == KIRT::exp_t::NUMBER) {
+		if (exp.number == 0) {
+			return "0";
 		}
+		string res_virt_ident = var_manager.register_temp_var();
+		string res_reg = var_manager.stage_var(res_virt_ident);
+		PUSH_ASM("  li %s, %d", res_reg.c_str(), exp.number);
+		var_manager.on_store(res_virt_ident);
+		return res_virt_ident;
+	} else if (exp.type == KIRT::exp_t::EQ0 || exp.type == KIRT::exp_t::NEQ0) {
+		string lhs_virt_ident = kirt2asm(*exp.lhs);
+		string lhs_reg = var_manager.stage_and_load_var(lhs_virt_ident);
+		string res_virt_ident = var_manager.register_temp_var();
+		string res_reg = var_manager.stage_var(res_virt_ident, lhs_reg);
+
+		PUSH_ASM(
+			"  %s %s, %s",
+			exp.type == KIRT::exp_t::EQ0 ? "seqz" : "snez",
+			res_reg.c_str(),
+			lhs_reg.c_str()
+		);
+		var_manager.on_store(res_virt_ident);
+		var_manager.release_var_if_temp(lhs_virt_ident);
+		return res_virt_ident;
+	} else {
+		auto lhs_virt_ident = kirt2asm(*exp.lhs);
+		auto rhs_virt_ident = kirt2asm(*exp.rhs);
+		string lhs_reg = var_manager.stage_and_load_var(lhs_virt_ident);
+		string rhs_reg = var_manager.stage_and_load_var(rhs_virt_ident, lhs_reg);
+		string res_virt_ident = var_manager.register_temp_var();
+		string res_reg = var_manager.stage_var(res_virt_ident, lhs_reg, rhs_reg);
+
+		PUSH_ASM(
+			"  %s %s, %s, %s",
+			kirt_exp_t2asm(exp.type).c_str(),
+			res_reg.c_str(),
+			lhs_reg.c_str(),
+			rhs_reg.c_str()
+		);
+		var_manager.on_store(res_virt_ident);
+		var_manager.release_var_if_temp(lhs_virt_ident);
+		var_manager.release_var_if_temp(rhs_virt_ident);
+		return res_virt_ident;
 	}
 }
 
