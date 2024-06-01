@@ -1,5 +1,6 @@
 #include "backend/kirt2asm.h"
 
+#include <algorithm>
 #include <cassert>
 #include <climits>
 #include <map>
@@ -55,11 +56,14 @@ private:
 		// write-back is necessary when evicting the register)
 		bool is_dirty;
 		// The last time this variable is used (for LRU replacement policy)
+		// When pin_mode is activated, it means whether 1) The var is a global
+		// var 2) The var has been swapped.
 		int last_use_timestamp;
 	};
 
 	struct ArrayMeta {
 		int space_offset;	// Offset to the space allocated for the array
+		int addr_var_offset;
 		int size;	// Size of the array, in words
 	};
 
@@ -76,7 +80,12 @@ private:
 	// Data about all local arrays (only local arrays, not function parameters)
 	std::unordered_map<string, ArrayMeta> local_arr_meta_db;
 
+	int num_pinnable_vars;
+	bool is_pin_mode;
+	std::unordered_set<string> params_list;
+
 	void _register_var(const string &ident, var_t type) {
+		num_pinnable_vars += 1;
 		if (type == var_t::LOCAL_VAR) {
 			int cur_offset;
 			if (!free_stack_offsets.empty()) {
@@ -95,10 +104,10 @@ private:
 		}
 	}
 
-	int _register_local_arr(const string &ident, int size) {
+	int _register_local_arr(const string &ident, int size, int addr_var_offset) {
 		int cur_offset = cur_num_stack_elems+size;
 		cur_num_stack_elems += size;
-		local_arr_meta_db[ident] = {cur_offset, size};
+		local_arr_meta_db[ident] = {cur_offset, size, addr_var_offset};
 		return cur_offset;
 	}
 
@@ -157,6 +166,10 @@ private:
 	// If a temp register is needed but not provided, return false
 	bool store_var_from_reg_simple_helper(const string &ident, const string &reg, const optional<string> &temp_reg_string = nullopt) {
 		const char* temp_reg = temp_reg_string.has_value() ? temp_reg_string.value().c_str() : nullptr;
+		if (!var_meta_db.count(ident)) {
+			fprintf(stderr, "Variable `%s` not found\n", ident.c_str());
+			my_assert(38, var_meta_db.count(ident));
+		}
 		VarMeta& meta = var_meta_db[ident];
 		if (meta.type == var_t::GLOBAL_VAR) {
 			// A global variable
@@ -196,6 +209,10 @@ private:
 
 	// Evict a register and clear relevant data
 	void evict_reg(const string &reg) {
+		if (is_pin_mode && std::count(all_callee_saved_regs.begin(), all_callee_saved_regs.end(), reg)) {
+			// We should never evict callee saved registers in pin mode
+			my_assert(37, false);
+		}
 		assert(reg2var.count(reg));
 		string &ident = reg2var[reg];
 		VarMeta &meta = var_meta_db[ident];
@@ -278,10 +295,14 @@ public:
 	// Called when entering a function
 	void on_enter_func() {
 		temp_var_counter.reset();
-		cur_num_stack_elems = all_callee_saved_regs.size()+1;	// Allocate space for callee-saved regs. +1 for ra
+		cur_num_stack_elems = all_callee_saved_regs.size()+2;	// Allocate space for callee-saved regs. +1 for ra
 		free_stack_offsets.clear();
 		var_meta_db.clear();
 		local_arr_meta_db.clear();
+
+		num_pinnable_vars = 0;
+		is_pin_mode = false;
+		params_list.clear();
 
 		cur_timestamp_cnter.reset();
 		used_callee_saved_regs.clear();
@@ -291,15 +312,34 @@ public:
 	// Called when exiting from a blocktemp 
 	// Ignore `ignore_reg` if provided (useful for generating branching instructions)
 	void on_exit_block(const optional<string> &ignore_reg = nullopt) {
-		// Evict all vars
-		for (const string &reg : all_caller_saved_regs) {
-			if (reg2var.count(reg) && (!ignore_reg.has_value() || reg != ignore_reg.value())) {
-				evict_reg(reg);
+		if (is_pin_mode) {
+			// Pin mode. Evict temp vars and mark global vars
+			for (auto &[ident, meta] : var_meta_db) {
+				if (meta.corresp_reg.has_value() && (!ignore_reg.has_value() || meta.corresp_reg.value() != ignore_reg.value())) {
+					if (meta.type == var_t::LOCAL_VAR && is_temp_var(ident)) {
+						evict_reg(meta.corresp_reg.value());
+					} else if (meta.type == var_t::GLOBAL_VAR) {
+						// Pin mode. Just write back without evicting
+						if (meta.is_dirty) {
+							store_var_from_reg_simple("@" + meta.global_ident, meta.corresp_reg.value());
+							meta.is_dirty = false;
+						}
+						// Mark it as obsolete
+						meta.last_use_timestamp = 1;
+					}
+				}
 			}
-		}
-		for (const string &reg : all_callee_saved_regs) {
-			if (reg2var.count(reg) && (!ignore_reg.has_value() || reg != ignore_reg.value())){
-				evict_reg(reg);
+		} else {
+			// Evict all vars
+			for (const string &reg : all_caller_saved_regs) {
+				if (reg2var.count(reg) && (!ignore_reg.has_value() || reg != ignore_reg.value())) {
+					evict_reg(reg);
+				}
+			}
+			for (const string &reg : all_callee_saved_regs) {
+				if (reg2var.count(reg) && (!ignore_reg.has_value() || reg != ignore_reg.value())){
+					evict_reg(reg);
+				}
 			}
 		}
 	}
@@ -318,6 +358,7 @@ public:
 		} else {
 			assert(0);
 		}
+		params_list.insert(ident);
 		// Copy the argument to my stack frame
 		int offset = var_meta_db[ident].offset;
 		if (kth <= 7) {
@@ -340,6 +381,16 @@ public:
 		_register_var(local_var.ident, var_t::LOCAL_VAR);
 	}
 
+	// Register a local array
+	// TODO Maybe we should register all vars first to avoid using indirect
+	// address to load/store variables
+	void register_local_arr(const KIRT::FuncLocalVar &local_arr) {
+		string arr_addr_var_ident = local_arr.ident + "#addr";
+		_register_var(arr_addr_var_ident, var_t::LOCAL_VAR);
+		int addr_var_offset = var_meta_db[arr_addr_var_ident].offset;
+		_register_local_arr(local_arr.ident, local_arr.type.numel(), addr_var_offset);
+	}
+
 	// Register a global variable / array
 	void register_global_var_or_arr(const KIRT::GlobalDecl &global_decl) {
 		if (global_decl.type.is_int()) {
@@ -351,9 +402,43 @@ public:
 		}
 	}
 
+	void on_all_register_done(const string &func_name) {
+		is_pin_mode = num_pinnable_vars <= (int)all_callee_saved_regs.size();
+		fprintf(stderr, "`%s`: Number of local variables: %d. %s pin mode.\n",
+			func_name.c_str(), num_pinnable_vars, is_pin_mode ? "Using" : "Not using");
+		if (is_pin_mode) {
+			// Allocate & load regs for all pinnable vars
+			int i = 0;
+			for (auto &[ident, meta] : var_meta_db) {
+				if (is_temp_var(ident)) continue;
+				string reg = all_callee_saved_regs[i]; ++i;
+				meta.corresp_reg = reg;
+				meta.is_dirty = false;
+				meta.last_use_timestamp = 0;
+				reg2var[reg] = ident;
+				if (meta.type == var_t::LOCAL_VAR && !params_list.count(ident) && \
+					ident.substr(ident.size()-5, 5) == "#addr" && local_arr_meta_db.count(ident.substr(0, ident.size()-5))) {
+					const ArrayMeta &arr_meta = local_arr_meta_db[ident.substr(0, ident.size()-5)];
+					PUSH_ASM("  li %s, %d", reg.c_str(), -arr_meta.space_offset*4);
+					PUSH_ASM("  add %s, sp, %s", reg.c_str(), reg.c_str());
+				} else if (!(meta.type == var_t::LOCAL_VAR && !params_list.count(ident) && ident.substr(ident.size()-5, 5) != "#addr")) {
+					load_var_to_reg_simple(ident, reg);
+				}
+				used_callee_saved_regs.insert(reg);
+			}
+		} else {
+			for (const auto &[ident, meta] : local_arr_meta_db) {
+				string arr_addr_reg = stage_var(ident + "#addr");
+				PUSH_ASM("  li %s, %d", arr_addr_reg.c_str(), -meta.space_offset*4);
+				PUSH_ASM("  add %s, sp, %s", arr_addr_reg.c_str(), arr_addr_reg.c_str());
+				on_store(ident + "#addr");
+			}
+		}
+	}
+
 	// Register a temp variable
 	// Return the virtual variable name
-	string register_temp_var() {
+	string get_new_temp_var() {
 		string ident = format("~temp%d", temp_var_counter.next());
 		_register_var(ident, var_t::LOCAL_VAR);
 		return ident;
@@ -370,7 +455,18 @@ public:
 			if (reg2var.count(reg)) {
 				VarMeta &meta = var_meta_db[reg2var[reg]];
 				if (meta.type == var_t::GLOBAL_VAR) {
-					evict_reg(reg);
+					if (is_pin_mode) {
+						// Pin mode. Just write back without evicting
+						if (meta.is_dirty) {
+							store_var_from_reg_simple("@" + meta.global_ident, reg);
+							meta.is_dirty = false;
+						}
+						// Mark it as obsolete
+						meta.last_use_timestamp = 1;
+					} else {
+						// Non pin mode. Evict the register
+						evict_reg(reg);
+					}
 				}
 			}
 		}
@@ -401,15 +497,21 @@ public:
 		}
 		assert (var_meta_db.count(ident));
 		VarMeta &meta = var_meta_db[ident];
-		if (!meta.corresp_reg.has_value()) {
-			// Need to allocate a register
-			string target = get_one_free_reg(is_temp_var(ident), hold_reg1, hold_reg2);
-			meta.corresp_reg = target;
-			meta.is_dirty = false;
-			reg2var[target] = ident;
+		if (is_pin_mode && !is_temp_var(ident)) {
+			my_assert(38, meta.corresp_reg.has_value());
+			string res = meta.corresp_reg.value();
+			return meta.corresp_reg.value();
+		} else {
+			if (!meta.corresp_reg.has_value()) {
+				// Need to allocate a register
+				string target = get_one_free_reg(is_temp_var(ident), hold_reg1, hold_reg2);
+				meta.corresp_reg = target;
+				meta.is_dirty = false;
+				reg2var[target] = ident;
+			}
+			meta.last_use_timestamp = cur_timestamp_cnter.next();
+			return meta.corresp_reg.value();
 		}
-		meta.last_use_timestamp = cur_timestamp_cnter.next();
-		return meta.corresp_reg.value();
 	}
 
 	// Stage + load the value
@@ -424,33 +526,33 @@ public:
 		}
 		assert (var_meta_db.count(ident));
 		VarMeta &meta = var_meta_db[ident];
-		if (!meta.corresp_reg.has_value()) {
-			string target = stage_var(ident, hold_reg1, hold_reg2);
-			load_var_to_reg_simple(ident, target);
+		if (is_pin_mode && !is_temp_var(ident)) {
+			my_assert(39, meta.corresp_reg.has_value());
+			if (meta.last_use_timestamp) {
+				// Must be a global var
+				my_assert(38, meta.type == var_t::GLOBAL_VAR);
+				load_var_to_reg_simple(ident, meta.corresp_reg.value());
+				meta.last_use_timestamp = 0;
+			}
+			return stage_var(ident, hold_reg1, hold_reg2);
+		} else {
+			if (!meta.corresp_reg.has_value()) {
+				string target = stage_var(ident, hold_reg1, hold_reg2);
+				load_var_to_reg_simple(ident, target);
+			}
+			return meta.corresp_reg.value();
 		}
-		return meta.corresp_reg.value();
 	}
 
 	void on_store(const string &ident) {
 		assert(var_meta_db.count(ident));
 		VarMeta &meta = var_meta_db[ident];
 		meta.is_dirty = true;
-		meta.last_use_timestamp = cur_timestamp_cnter.next();
+		if (is_pin_mode && !is_temp_var(ident)) {
+		} else {
+			meta.last_use_timestamp = cur_timestamp_cnter.next();
+		}
 		assert(meta.corresp_reg.has_value());
-	}
-
-	// Register a local array
-	// TODO Maybe we should register all vars first to avoid using indirect
-	// address to load/store variables
-	void register_local_arr(const KIRT::FuncLocalVar &local_arr) {
-		string arr_addr_var_ident = local_arr.ident + "#addr";
-		_register_var(arr_addr_var_ident, var_t::LOCAL_VAR);
-		int offset = _register_local_arr(local_arr.ident, local_arr.type.numel());
-		// Write down the address of the array
-		string arr_addr_reg = stage_var(arr_addr_var_ident);
-		PUSH_ASM("  li %s, %d", arr_addr_reg.c_str(), -offset*4);
-		PUSH_ASM("  add %s, sp, %s", arr_addr_reg.c_str(), arr_addr_reg.c_str());
-		on_store(arr_addr_var_ident);
 	}
 
 	// A small helper function for loading the address of an array to a register
@@ -598,6 +700,9 @@ list<string> kirt2asm(const KIRT::Function &func) {
 		}
 	}
 
+	// TODO Optimize pinning mode by only pinning used global vars
+	var_manager.on_all_register_done(func.name);
+
 	for (const std::shared_ptr<KIRT::Block> &block : func.blocks.blocks) {
 		kirt2asm(*block);
 	}
@@ -660,7 +765,7 @@ void kirt2asm(const shared_ptr<KIRT::Inst> &inst) {
 
 			string arr_addr_reg = var_manager.load_arr_addr_to_reg(assign_inst->lval.ident, index_reg);
 
-			string item_addr_temp_var = var_manager.register_temp_var();
+			string item_addr_temp_var = var_manager.get_new_temp_var();
 			string item_addr_reg = var_manager.stage_var(item_addr_temp_var, index_reg, arr_addr_reg);
 			
 			PUSH_ASM("  add %s, %s, %s", item_addr_reg.c_str(), arr_addr_reg.c_str(), index_reg.c_str());
@@ -738,7 +843,7 @@ string kirt2asm(const KIRT::Exp &exp) {
 
 			string arr_addr_reg = var_manager.load_arr_addr_to_reg(exp.lval.ident, index_reg);
 
-			string res_virt_ident = var_manager.register_temp_var();
+			string res_virt_ident = var_manager.get_new_temp_var();
 			string res_reg = var_manager.stage_var(res_virt_ident, index_reg, arr_addr_reg);
 			PUSH_ASM("  add %s, %s, %s", res_reg.c_str(), index_reg.c_str(), arr_addr_reg.c_str());
 			PUSH_ASM("  lw %s, 0(%s)", res_reg.c_str(), res_reg.c_str());
@@ -766,9 +871,8 @@ string kirt2asm(const KIRT::Exp &exp) {
 		int stack_frame_len = num_stack_elems*4; 
 
 		// Place args
-		// After evicting these two regs, `arg_virt_ident` won't touch aX registers,
+		// After evicting this reg, `arg_virt_ident` won't touch aX registers,
 		// keeping them safe
-		var_manager.manually_evict_reg("s11");
 		var_manager.manually_evict_reg("ra");
 		// Evict this for temp offset calculation if necessary
 		optional<string> arg_addr_temp_reg;
@@ -810,7 +914,7 @@ string kirt2asm(const KIRT::Exp &exp) {
 				);
 			}
 			var_manager.release_var_if_temp(arg_virt_ident);
-			var_manager.manually_evict_reg(arg_reg);
+			// var_manager.manually_evict_reg(arg_reg);
 		}
 
 		// Save vars (evict all caller-saved regs and global vars)
@@ -855,7 +959,7 @@ string kirt2asm(const KIRT::Exp &exp) {
 		}
 
 		// Save the return value
-		string res_virt_ident = var_manager.register_temp_var();
+		string res_virt_ident = var_manager.get_new_temp_var();
 		string res_reg = var_manager.stage_var(res_virt_ident);
 		if (res_reg != "a0")
 			PUSH_ASM("  mv %s, a0", res_reg.c_str());
@@ -867,7 +971,7 @@ string kirt2asm(const KIRT::Exp &exp) {
 		if (exp.number == 0) {
 			return "0";
 		}
-		string res_virt_ident = var_manager.register_temp_var();
+		string res_virt_ident = var_manager.get_new_temp_var();
 		string res_reg = var_manager.stage_var(res_virt_ident);
 		PUSH_ASM("  li %s, %d", res_reg.c_str(), exp.number);
 		var_manager.on_store(res_virt_ident);
@@ -875,7 +979,7 @@ string kirt2asm(const KIRT::Exp &exp) {
 	} else if (exp.type == KIRT::exp_t::EQ0 || exp.type == KIRT::exp_t::NEQ0) {
 		string lhs_virt_ident = kirt2asm(*exp.lhs);
 		string lhs_reg = var_manager.stage_and_load_var(lhs_virt_ident);
-		string res_virt_ident = var_manager.register_temp_var();
+		string res_virt_ident = var_manager.get_new_temp_var();
 		string res_reg = var_manager.stage_var(res_virt_ident, lhs_reg);
 
 		PUSH_ASM(
@@ -892,7 +996,7 @@ string kirt2asm(const KIRT::Exp &exp) {
 		auto rhs_virt_ident = kirt2asm(*exp.rhs);
 		string lhs_reg = var_manager.stage_and_load_var(lhs_virt_ident);
 		string rhs_reg = var_manager.stage_and_load_var(rhs_virt_ident, lhs_reg);
-		string res_virt_ident = var_manager.register_temp_var();
+		string res_virt_ident = var_manager.get_new_temp_var();
 		string res_reg = var_manager.stage_var(res_virt_ident, lhs_reg, rhs_reg);
 
 		PUSH_ASM(

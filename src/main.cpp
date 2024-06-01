@@ -90,15 +90,16 @@ int main(int argc, const char *argv[]) {
   KIRT::pass_optim_exp_op(kirt);
 
   // Print KIR
-  fprintf(stderr, "Converting KIRT to string...\n");
-  std::list<std::string> strkir = KIRT::kirt2str(kirt);
   if (print_ir) {
+    fprintf(stderr, "Converting KIRT to string...\n");
+    std::list<std::string> strkir = KIRT::kirt2str(kirt);
     for (const std::string &line : strkir) {
       *output_stream << line << std::endl;
     }
   }
 
   if (print_asm) {
+    fprintf(stderr, "Converting KIRT to ASM...\n");
     std::list<std::string> strasm = ASM::kirt2asm(kirt);
     for (const std::string &line : strasm) {
       *output_stream << line << std::endl;
