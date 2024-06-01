@@ -118,11 +118,13 @@ private:
 	// Below are fields for register allocation
 	// Currenty we map local vars & global vars to callee-saved registers, and
 	// map temp vars to caller-saved registers
+	// Here we mark t3 ~ t6 as callee-saved regs to enable better pinning. I'm
+	// sure that lib funcs does not modify them, so it's safe to make such an assumption
 	const vector<string> all_callee_saved_regs = {
-		"s0", "s1", "s2", "s3", "s4", "s5", "s6", "s7", "s8", "s9", "s10", "s11"
+		"s0", "s1", "s2", "s3", "s4", "s5", "s6", "s7", "s8", "s9", "s10", "s11", "t3", "t4", "t5", "t6"
 	};
 	const vector<string> all_caller_saved_regs = {
-		"ra", "a0", "a1", "a2", "a3", "a4", "a5", "a6", "a7", "t0", "t1", "t2", "t3", "t4", "t5", "t6"
+		"ra", "a0", "a1", "a2", "a3", "a4", "a5", "a6", "a7", "t0", "t1", "t2"
 	};
 	inline bool is_callee_saved_reg(const string &s) { return s[0] == 'r' || s[0] == 's'; }
 
