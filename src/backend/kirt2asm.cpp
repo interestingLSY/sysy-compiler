@@ -420,6 +420,8 @@ public:
 					const ArrayMeta &arr_meta = local_arr_meta_db[ident.substr(0, ident.size()-5)];
 					PUSH_ASM("  li %s, %d", reg.c_str(), -arr_meta.space_offset*4);
 					PUSH_ASM("  add %s, sp, %s", reg.c_str(), reg.c_str());
+				} else if (meta.type == var_t::LOCAL_VAR && !params_list.count(ident)) {
+					// A local variable. No need to load
 				} else {
 					load_var_to_reg_simple(ident, reg);
 				}
