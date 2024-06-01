@@ -766,12 +766,12 @@ string kirt2asm(const KIRT::Exp &exp) {
 		int stack_frame_len = num_stack_elems*4; 
 
 		// Place args
-		// After evicting these two regs, `arg_virt_ident` must be placed here
-		var_manager.manually_evict_reg("s0");
+		// After evicting these two regs, `arg_virt_ident` won't touch aX registers,
+		// keeping them safe
+		var_manager.manually_evict_reg("s11");
 		var_manager.manually_evict_reg("ra");
-		// Evict this for temp offset calculation
-		var_manager.manually_evict_reg("t0");
-		string arg_addr_temp_reg = "t0";
+		// Evict this for temp offset calculation if necessary
+		optional<string> arg_addr_temp_reg;
 		for (int i = (int)exp.args.size()-1; i >= 0; i--) {
 			// We perform this backwards to avoid overwriting the aX registers
 			string arg_virt_ident = arg_virt_idents[i];
@@ -789,20 +789,24 @@ string kirt2asm(const KIRT::Exp &exp) {
 				}
 			} else {
 				// Save the argument to the stack
+				if (!arg_addr_temp_reg) {
+					var_manager.manually_evict_reg("t0");
+					arg_addr_temp_reg = "t0";
+				}
 				PUSH_ASM(
 					"  li %s, %d",
-					arg_addr_temp_reg.c_str(),
+					arg_addr_temp_reg.value().c_str(),
 					-stack_frame_len-(num_args-i)*4
 				);
 				PUSH_ASM(
 					"  add %s, sp, %s",
-					arg_addr_temp_reg.c_str(),
-					arg_addr_temp_reg.c_str()
+					arg_addr_temp_reg.value().c_str(),
+					arg_addr_temp_reg.value().c_str()
 				);
 				PUSH_ASM(
 					"  sw %s, 0(%s)",
 					arg_reg.c_str(),
-					arg_addr_temp_reg.c_str()
+					arg_addr_temp_reg.value().c_str()
 				);
 			}
 			var_manager.release_var_if_temp(arg_virt_ident);
