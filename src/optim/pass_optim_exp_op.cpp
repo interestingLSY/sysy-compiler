@@ -50,6 +50,41 @@ static void pass_optim_exp_op(Exp &exp) {
 			exp.lhs.reset();
 			exp.rhs.reset();
 			num_propagated += 1;
+		} else {
+			// Try to optimize this op
+			if (cur_exp_type == exp_t::MUL) {
+				if (exp.lhs->type == exp_t::NUMBER)
+					std::swap(exp.lhs, exp.rhs);
+				if (exp.rhs->type == exp_t::NUMBER) {
+					int x = exp.rhs->number;
+					int log_x = log2_floor(x);
+					if (x > 0 && (1<<log_x) == x) {
+						exp.type = exp_t::SHL;
+						exp.rhs->number = log_x;
+						num_replaced += 1;
+					}
+				}
+			} else if (cur_exp_type == exp_t::DIV) {
+				if (exp.rhs->type == exp_t::NUMBER) {
+					int x = exp.rhs->number;
+					int log_x = log2_floor(x);
+					if (x > 0 && (1<<log_x) == x) {
+						exp.type = exp_t::SAR;
+						exp.rhs->number = log_x;
+						num_replaced += 1;
+					}
+				}
+			} else if (cur_exp_type == exp_t::REM) {
+				if (exp.rhs->type == exp_t::NUMBER) {
+					int x = exp.rhs->number;
+					int log_x = log2_floor(x);
+					if (x > 0 && (1<<log_x) == x) {
+						exp.type = exp_t::BITWISE_AND;
+						exp.rhs->number = x-1;
+						num_replaced += 1;
+					}
+				}
+			}
 		}
 		return;
 	} else {

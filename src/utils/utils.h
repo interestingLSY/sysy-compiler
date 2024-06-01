@@ -66,3 +66,14 @@ static inline std::list<T>& operator>=(std::list<T> &lhs, const std::list<T> &rh
 		fprintf(stderr, "Assertion failed: %s\n", #cond); \
 		exit(code); \
 	}
+
+inline int log2_floor(int x) {
+	if (x <= 0) return -1;
+	if (x == 1) return 0;
+	int res = 0;
+	while (x != 1) {
+		res += 1;
+		x >>= 1;
+	}
+	return res;
+}
