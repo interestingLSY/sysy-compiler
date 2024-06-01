@@ -416,12 +416,11 @@ public:
 				meta.is_dirty = false;
 				meta.last_use_timestamp = 0;
 				reg2var[reg] = ident;
-				if (meta.type == var_t::LOCAL_VAR && !params_list.count(ident) && \
-					ident.substr(ident.size()-5, 5) == "#addr" && local_arr_meta_db.count(ident.substr(0, ident.size()-5))) {
+				if (meta.type == var_t::LOCAL_VAR && local_arr_meta_db.count(ident.substr(0, ident.size()-5))) {
 					const ArrayMeta &arr_meta = local_arr_meta_db[ident.substr(0, ident.size()-5)];
 					PUSH_ASM("  li %s, %d", reg.c_str(), -arr_meta.space_offset*4);
 					PUSH_ASM("  add %s, sp, %s", reg.c_str(), reg.c_str());
-				} else if (!(meta.type == var_t::LOCAL_VAR && !params_list.count(ident) && ident.substr(ident.size()-5, 5) != "#addr")) {
+				} else {
 					load_var_to_reg_simple(ident, reg);
 				}
 				used_callee_saved_regs.insert(reg);
@@ -549,6 +548,8 @@ public:
 		VarMeta &meta = var_meta_db[ident];
 		meta.is_dirty = true;
 		if (is_pin_mode && !is_temp_var(ident)) {
+			if (meta.type == var_t::GLOBAL_VAR)
+				meta.last_use_timestamp = 0;
 		} else {
 			meta.last_use_timestamp = cur_timestamp_cnter.next();
 		}
