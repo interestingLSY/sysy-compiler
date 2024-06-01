@@ -13,6 +13,7 @@
 #include "middleend/pass_fill_block_id_name.h"
 #include "optim/pass_block_fusion.h"
 #include "optim/pass_optim_exp_op.h"
+#include "optim/pass_unit_block_elim.h"
 #include "backend/kirt2asm.h"
 
 extern FILE *yyin;
@@ -79,13 +80,16 @@ int main(int argc, const char *argv[]) {
   // fprintf(stderr, "Running pass: replace unasmable instructions...\n");
   KIRT::pass_repl_unasm(kirt);
 
+  KIRT::pass_fill_block_id_name(kirt);
+
   // fprintf(stderr, "Running pass: collapse arrays...\n");
   KIRT::pass_collapse_arr(kirt);
 
-  // fprintf(stderr, "Running pass: fill block names...\n");
-  KIRT::pass_fill_block_id_name(kirt);
-
   KIRT::pass_block_fusion(kirt);
+
+  KIRT::pass_fill_block_id_name(kirt);  // Fill in id again since block fusion may delete blocks
+
+  KIRT::pass_unit_block_elim(kirt);
 
   KIRT::pass_optim_exp_op(kirt);
 

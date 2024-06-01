@@ -759,7 +759,6 @@ list<string> kirt2asm(const KIRT::Function &func) {
 		}
 	}
 
-	// TODO Optimize pinning mode by only pinning used global vars
 	var_manager.on_all_register_done(func.name);
 
 	for (const std::shared_ptr<KIRT::Block> &block : func.blocks.blocks) {
@@ -871,8 +870,6 @@ void kirt2asm(const shared_ptr<KIRT::TermInst> &inst) {
 
 		// TODO Now we first store the value of the instruction into a reg, then use
 		// bnez to jump. This can be optimized
-		// TODO Now we always jump to the false block, via `j %s`. In the future we may
-		// get rid of this jump via BlockReorderPass
 		var_manager.on_exit_block(cond_reg);
 		PUSH_ASM(
 			"  bnez %s, %s",
