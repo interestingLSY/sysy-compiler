@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "utils/utils.h"
+#include "optim/optim_dbs.h"
 
 namespace ASM {
 
@@ -153,15 +154,31 @@ private:
 	// Below are fields for register allocation
 	// Currenty we map local vars & global vars to callee-saved registers, and
 	// map temp vars to caller-saved registers
+	// 
 	// Here we mark t3 ~ t6 as callee-saved regs to enable better pinning. I'm
 	// sure that lib funcs does not modify them, so it's safe to make such an assumption
+	// 
+	// If the function is not a leaf function, use callee saved regs for local vars
+	// and caller saved regs for temp vars
+	// 
+	// If the function is a leaf function, use all regs for all vars
 	const vector<string> all_callee_saved_regs = {
 		"s0", "s1", "s2", "s3", "s4", "s5", "s6", "s7", "s8", "s9", "s10", "s11", "t3", "t4", "t5", "t6"
 	};
 	const vector<string> all_caller_saved_regs = {
-		"ra", "t0", "t1", "t2", "a0", "a1", "a2", "a3", "a4", "a5", "a6", "a7"
+		"t0", "t1", "t2", "ra", "a0", "a1", "a2", "a3", "a4", "a5", "a6", "a7"
 	};
-	inline bool is_callee_saved_reg(const string &s) { return s[0] == 'r' || s[0] == 's'; }
+	const vector<string> leaf_func_local_var_regs = {
+		// Put caller_saved regs first to avoid the expensive load-store for
+		// leaf functions
+		"a0", "a1", "a2", "a3", "a4", "a5", "a6", "a7", "ra",
+		"s0", "s1", "s2", "s3", "s4", "s5", "s6", "s7", "s8", "s9", "t3", "t4", "t5", "t6"
+	};
+	const vector<string> leaf_func_temp_var_regs = {
+		"t0", "t1", "t2", "s10", "s11"
+	};
+
+	bool is_leaf_func;
 
 	Counter cur_timestamp_cnter;	// For LRU
 
@@ -238,7 +255,7 @@ private:
 		bool is_success = store_var_from_reg_simple_helper(ident, reg);
 		if (!is_success) {
 			// Must provide a temp register
-			string temp_reg = get_one_free_reg(true);
+			string temp_reg = get_one_free_reg(is_leaf_func ? leaf_func_temp_var_regs : all_caller_saved_regs);
 			is_success = store_var_from_reg_simple_helper(ident, reg, temp_reg);
 			assert(is_success);
 		}
@@ -246,9 +263,16 @@ private:
 
 	// Evict a register and clear relevant data
 	void evict_reg(const string &reg) {
-		if (is_pin_mode && std::count(all_callee_saved_regs.begin(), all_callee_saved_regs.end(), reg)) {
-			// We should never evict callee saved registers in pin mode
-			my_assert(37, false);
+		if (is_pin_mode) {
+			// We should never evict local-var backended regs in pin mode
+			for (auto &[ident, meta] : var_meta_db) {
+				if (meta.corresp_reg.has_value() && meta.corresp_reg.value() == reg) {
+					if (meta.type == var_t::LOCAL_VAR && !is_temp_var(ident)) {
+						fprintf(stderr, "Variable `%s` is pinned to register `%s`\n", ident.c_str(), reg.c_str());
+						my_assert(37, false);
+					}
+				}
+			}
 		}
 		assert(reg2var.count(reg));
 		string &ident = reg2var[reg];
@@ -263,13 +287,19 @@ private:
 		reg2var.erase(reg);
 	}
 
+	void add_used_reg(const string &reg) {
+		if (std::count(all_callee_saved_regs.begin(), all_callee_saved_regs.end(), reg) || reg == "ra") {
+			// If the register is callee-saved, we should mark it as used
+			used_callee_saved_regs.insert(reg);
+		}
+	}
+
 	// Get one free register. Evict one if all registers are occupied
 	string get_one_free_reg(
-		bool is_caller_saved,
+		const vector<string> &candidates,
 		const std::optional<string> &hold_reg1 = std::nullopt,
 		const std::optional<string> &hold_reg2 = std::nullopt
 	) {
-		const vector<string> &candidates = is_caller_saved ? all_caller_saved_regs : all_callee_saved_regs;
 		optional<string> result_reg = nullopt;
 		for (const string &reg : candidates) {
 			// NOTE Under some scenarios, we may want to hold some registers even
@@ -297,10 +327,7 @@ private:
 			// Evict `result_reg`
 			evict_reg(result_reg.value());
 		}
-		if (!is_caller_saved) {
-			// If the register is callee-saved, we should mark it as used
-			used_callee_saved_regs.insert(result_reg.value());
-		}
+		add_used_reg(result_reg.value());
 		return result_reg.value();
 	}
 
@@ -323,7 +350,7 @@ public:
 
 	void manually_add_used_callee_saved_regs(const string &reg) {
 		// For adding "ra" into the list
-		used_callee_saved_regs.insert(reg);
+		add_used_reg(reg);
 	}
 
 	void manually_evict_reg(const string &reg) {
@@ -333,8 +360,24 @@ public:
 		}
 	}
 
+	void clear_reg_a0_before_return() {
+		if (!reg2var.count("a0")) return;
+		string ident = reg2var["a0"];
+		VarMeta &meta = var_meta_db[ident];
+		if (meta.type == var_t::GLOBAL_VAR) {
+			store_var_from_reg_simple(ident, "a0");
+			meta.corresp_reg = nullopt;
+			meta.is_dirty = false;
+			meta.last_use_timestamp = 0;
+		}
+		// We do not need to write back local vars since we are going to return
+		reg2var.erase("a0");
+	}
+
 	// Called when entering a function
-	void on_enter_func() {
+	void on_enter_func(bool is_leaf_func) {
+		this->is_leaf_func = is_leaf_func;
+
 		temp_var_counter.reset();
 		cur_num_stack_elems = all_callee_saved_regs.size()+2;	// Allocate space for callee-saved regs. +1 for ra
 		free_stack_offsets.clear();
@@ -348,6 +391,11 @@ public:
 		cur_timestamp_cnter.reset();
 		used_callee_saved_regs.clear();
 		reg2var.clear();
+
+		if (!this->is_leaf_func) {
+			// ra is different from other caller-saved registers since we must restore it
+			manually_add_used_callee_saved_regs("ra");
+		}
 	}
 
 	// Called when exiting from a blocktemp 
@@ -436,40 +484,76 @@ public:
 	}
 
 	void on_all_register_done(const string &func_name) {
-		is_pin_mode = num_pinnable_vars <= (int)all_callee_saved_regs.size();
-		fprintf(stderr, "`%s`: Number of local variables: %d. %s pin mode.\n",
-			func_name.c_str(), num_pinnable_vars, is_pin_mode ? "Using" : "Not using");
+		const vector<string> &pin_slot_reg = is_leaf_func ? leaf_func_local_var_regs : all_callee_saved_regs;
+		is_pin_mode = num_pinnable_vars <= (int)pin_slot_reg.size();
+		fprintf(stderr, "`%s`: Number of local variables: %d. %s pin mode. %s\n",
+			func_name.c_str(), num_pinnable_vars, is_pin_mode ? "Using" : "Not using",
+			is_leaf_func ? "(leaf)" : "");
 		if (is_pin_mode) {
 			// Allocate & load regs for all pinnable vars
-			int i = 0;
+			std::vector<string> remaining_regs = pin_slot_reg;
+
+			// Load func params first, or aX will be overwritten
 			for (auto &[ident, meta] : var_meta_db) {
 				if (is_temp_var(ident)) continue;
-				string reg = all_callee_saved_regs[i]; ++i;
-				meta.corresp_reg = reg;
-				meta.is_dirty = false;
-				meta.last_use_timestamp = 0;
-				reg2var[reg] = ident;
-				if (meta.type == var_t::LOCAL_VAR && local_arr_meta_db.count(ident.substr(0, ident.size()-5))) {
-					const ArrayMeta &arr_meta = local_arr_meta_db[ident.substr(0, ident.size()-5)];
-					PUSH_ASM("  li %s, %d", reg.c_str(), -arr_meta.space_offset*4);
-					PUSH_ASM("  add %s, sp, %s", reg.c_str(), reg.c_str());
-				} else if (meta.type == var_t::LOCAL_VAR && !param_db.count(ident)) {
-					// A local variable. No need to load
-				} else if (meta.type == var_t::LOCAL_VAR && param_db.count(ident)) {
+				if (meta.type == var_t::LOCAL_VAR && param_db.count(ident)) {
 					// A parameter. If its kth >= 8 we need to load it from the stack
 					ParamMeta &param_meta = param_db[ident];
+					string reg;
+					if (param_meta.kth <= 7 && is_leaf_func)
+						reg = format("a%d", param_meta.kth);
+					else {
+						for (auto iter = remaining_regs.begin(); iter != remaining_regs.end(); ) {
+							if ((*iter)[0] != 'a') {
+								reg = *iter;
+								break;
+							} else {
+								++iter;
+							}
+						}
+					}
+					remaining_regs.erase(std::find(remaining_regs.begin(), remaining_regs.end(), reg));
+
+					meta.corresp_reg = reg;
+					meta.is_dirty = false;
+					meta.last_use_timestamp = 0;
+					reg2var[reg] = ident;
+
 					if (param_meta.kth >= 8) {
 						PUSH_ASM("  lw %s, %d(sp)", reg.c_str(), 4*(param_meta.kth-8));
 					} else {
 						string src_reg = format("a%d", param_meta.kth);
 						if (src_reg != reg) {
 							PUSH_ASM("  mv %s, %s", reg.c_str(), src_reg.c_str());
-						}
+						}	
 					}
+
+					add_used_reg(reg);
+				}
+			}
+
+			for (auto &[ident, meta] : var_meta_db) {
+				if (is_temp_var(ident)) continue;
+				if (meta.type == var_t::LOCAL_VAR && param_db.count(ident))
+					continue;
+				string reg = *remaining_regs.begin();
+				remaining_regs.erase(std::find(remaining_regs.begin(), remaining_regs.end(), reg));
+
+				meta.corresp_reg = reg;
+				meta.is_dirty = false;
+				meta.last_use_timestamp = 0;
+				reg2var[reg] = ident;
+
+				if (meta.type == var_t::LOCAL_VAR && local_arr_meta_db.count(ident.substr(0, ident.size()-5))) {
+					const ArrayMeta &arr_meta = local_arr_meta_db[ident.substr(0, ident.size()-5)];
+					PUSH_ASM("  li %s, %d", reg.c_str(), -arr_meta.space_offset*4);
+					PUSH_ASM("  add %s, sp, %s", reg.c_str(), reg.c_str());
+				} else if (meta.type == var_t::LOCAL_VAR && !param_db.count(ident)) {
+					// A local variable. No need to load
 				} else {
 					load_var_to_reg_simple(ident, reg);
 				}
-				used_callee_saved_regs.insert(reg);
+				add_used_reg(reg);
 			}
 		} else {
 			for (const auto &[ident, meta] : local_arr_meta_db) {
@@ -561,19 +645,24 @@ public:
 		VarMeta &meta = var_meta_db[ident];
 		if (is_pin_mode && !is_temp_var(ident)) {
 			my_assert(38, meta.corresp_reg.has_value());
-			string res = meta.corresp_reg.value();
-			return meta.corresp_reg.value();
 		} else {
 			if (!meta.corresp_reg.has_value()) {
 				// Need to allocate a register
-				string target = get_one_free_reg(is_temp_var(ident), hold_reg1, hold_reg2);
+				string target = get_one_free_reg(
+					is_temp_var(ident) ?
+					(is_leaf_func ? leaf_func_temp_var_regs : all_caller_saved_regs) :
+					(is_leaf_func ? leaf_func_local_var_regs : all_callee_saved_regs),
+					hold_reg1, hold_reg2
+				);
 				meta.corresp_reg = target;
 				meta.is_dirty = false;
 				reg2var[target] = ident;
 			}
 			meta.last_use_timestamp = cur_timestamp_cnter.next();
-			return meta.corresp_reg.value();
 		}
+		string res = meta.corresp_reg.value();
+		add_used_reg(res);
+		return res;
 	}
 
 	// Stage + load the value
@@ -795,9 +884,8 @@ list<string> kirt2asm(const KIRT::Function &func) {
 	// Save registers
 	PUSH_ASM("<SAVE_REGISTERS>");
 
-	var_manager.on_enter_func();
-	// ra is different from other caller-saved registers since we must restore it
-	var_manager.manually_add_used_callee_saved_regs("ra");
+	bool is_leaf_func = !KIRT::func2callees.count(func.name) || KIRT::func2callees.at(func.name).empty();
+	var_manager.on_enter_func(is_leaf_func);
 
 	// Arguments registration
 	for (int i = 0; i < func.fparams.size(); i++) {
@@ -917,8 +1005,10 @@ void kirt2asm(const shared_ptr<KIRT::TermInst> &inst) {
 		if (ret_inst->ret_exp) {
 			string exp_var_ident = kirt2asm(*ret_inst->ret_exp);
 			string exp_reg = var_manager.stage_and_load_var(exp_var_ident, std::nullopt);
-			if (exp_reg != "a0")
+			if (exp_reg != "a0") {
+				var_manager.clear_reg_a0_before_return();
 				PUSH_ASM("  mv a0, %s", exp_reg.c_str());
+			}
 			var_manager.release_var_if_temp(exp_var_ident);
 		}
 		var_manager.on_exit_block();
