@@ -7,7 +7,7 @@
 
 namespace KIRT {
 
-static void pass_repl_unasm(Exp &exp) {
+static void pass_repl_unasm(Exp &exp, bool is_used_in_br = false) {
 	if (exp.lhs)
 		pass_repl_unasm(*exp.lhs);
 	if (exp.rhs)
@@ -27,6 +27,7 @@ static void pass_repl_unasm(Exp &exp) {
 	// althrough RISC-V does not have a EQ instruction, it has BEQ.
 	// So for code like `if (a == b)`, we can use BEQ directly
 	if (exp.type == exp_t::EQ) {
+		if (is_used_in_br) return;
 		if (is_zero(*exp.rhs)) {
 			exp.type = exp_t::EQ0;
 			exp.rhs.reset();
@@ -45,6 +46,7 @@ static void pass_repl_unasm(Exp &exp) {
 			exp.rhs.reset();
 		}
 	} else if (exp.type == exp_t::NEQ) {
+		if (is_used_in_br) return;
 		if (is_zero(*exp.rhs)) {
 			exp.type = exp_t::NEQ0;
 			exp.rhs.reset();
@@ -64,6 +66,7 @@ static void pass_repl_unasm(Exp &exp) {
 		}
 	} else if (exp.type == exp_t::LEQ) {
 		// a = (b <= c) <=> a = (b > c) == 0
+		if (is_used_in_br) return;
 		auto gt_exp = std::make_shared<Exp>();
 		gt_exp->type = exp_t::GT;
 		gt_exp->lhs = exp.lhs;
@@ -73,6 +76,7 @@ static void pass_repl_unasm(Exp &exp) {
 		exp.rhs.reset();
 	} else if (exp.type == exp_t::GEQ) {
 		// a = (b >= c) <=> a = (b < c) == 0
+		if (is_used_in_br) return;
 		auto lt_exp = std::make_shared<Exp>();
 		lt_exp->type = exp_t::LT;
 		lt_exp->lhs = exp.lhs;
@@ -102,7 +106,7 @@ static void pass_repl_unasm(shared_ptr<TermInst> &term_inst) {
 		if (ret_inst->ret_exp)
 			pass_repl_unasm(*ret_inst->ret_exp);
 	} else if (auto br_inst = dynamic_cast<BranchInst *>(term_inst.get())) {
-		pass_repl_unasm(br_inst->cond);
+		pass_repl_unasm(br_inst->cond, true);
 	} else if (auto jump_inst = dynamic_cast<JumpInst *>(term_inst.get())) {
 	} else {
 		assert(0);

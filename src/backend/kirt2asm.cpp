@@ -309,6 +309,10 @@ public:
 		return cur_num_stack_elems;
 	}
 
+	bool get_is_pin_mode() {
+		return is_pin_mode;
+	}
+
 	vector<string> get_used_callee_saved_regs() {
 		vector<string> res;
 		for (const string &reg : used_callee_saved_regs) {
@@ -348,13 +352,18 @@ public:
 
 	// Called when exiting from a blocktemp 
 	// Ignore `ignore_reg` if provided (useful for generating branching instructions)
-	void on_exit_block(const optional<string> &ignore_reg = nullopt) {
+	void on_exit_block(const optional<string> &ignore_reg1 = nullopt, const optional<string> &ignore_reg2 = nullopt) {
+		auto is_ignored = [&](const string &reg) -> bool {
+			return (ignore_reg1.has_value() && reg == ignore_reg1.value()) ||
+				(ignore_reg2.has_value() && reg == ignore_reg2.value());
+		};
 		if (is_pin_mode) {
 			// Pin mode. Evict temp vars and mark global vars
 			for (auto &[ident, meta] : var_meta_db) {
-				if (meta.corresp_reg.has_value() && (!ignore_reg.has_value() || meta.corresp_reg.value() != ignore_reg.value())) {
+				if (meta.corresp_reg.has_value()) {
 					if (meta.type == var_t::LOCAL_VAR && is_temp_var(ident)) {
-						evict_reg(meta.corresp_reg.value());
+						if (!is_ignored(meta.corresp_reg.value()))
+							evict_reg(meta.corresp_reg.value());
 					} else if (meta.type == var_t::GLOBAL_VAR) {
 						// Pin mode. Just write back without evicting
 						if (meta.is_dirty) {
@@ -369,12 +378,12 @@ public:
 		} else {
 			// Evict all vars
 			for (const string &reg : all_caller_saved_regs) {
-				if (reg2var.count(reg) && (!ignore_reg.has_value() || reg != ignore_reg.value())) {
+				if (reg2var.count(reg) && !is_ignored(reg)) {
 					evict_reg(reg);
 				}
 			}
 			for (const string &reg : all_callee_saved_regs) {
-				if (reg2var.count(reg) && (!ignore_reg.has_value() || reg != ignore_reg.value())){
+				if (reg2var.count(reg) && !is_ignored(reg)) {
 					evict_reg(reg);
 				}
 			}
@@ -920,39 +929,126 @@ void kirt2asm(const shared_ptr<KIRT::TermInst> &inst) {
 			rename_block(jump_inst->target_block->name).c_str()
 		);
 	} else if (const KIRT::BranchInst *branch_inst = dynamic_cast<const KIRT::BranchInst *>(inst.get())) {
-		string cond_var_ident = kirt2asm(branch_inst->cond);
-		string cond_reg = var_manager.stage_and_load_var(cond_var_ident, std::nullopt);
+		KIRT::exp_t cond_type = branch_inst->cond.type;
+		
+		string branch_inst_name;	// The name of the branch instruction
+		string branch_inst_arg;
 
-		var_manager.on_exit_block(cond_reg);
+		if (cond_type == KIRT::exp_t::EQ0 || cond_type == KIRT::exp_t::NEQ0) {
+			// Use beq0 / bne0
+			string cond_var_ident = kirt2asm(*branch_inst->cond.lhs);
+			string cond_reg = var_manager.stage_and_load_var(cond_var_ident);
+			var_manager.on_exit_block(cond_reg);
+			branch_inst_name = (cond_type == KIRT::exp_t::EQ0 ? "beqz" : "bnez"),
+			branch_inst_arg = cond_reg.c_str();
+			PUSH_ASM("<BRANCH_INST>");
+			var_manager.release_var_if_temp(cond_var_ident);
+		} else if (cond_type == KIRT::exp_t::EQ || cond_type == KIRT::exp_t::NEQ ||
+			cond_type == KIRT::exp_t::LT || cond_type == KIRT::exp_t::GT ||
+			cond_type == KIRT::exp_t::LEQ || cond_type == KIRT::exp_t::GEQ ) {
+			// Use beq / bne / blt / bge
+			string lhs_var_ident = kirt2asm(*branch_inst->cond.lhs);
+			string rhs_var_ident = kirt2asm(*branch_inst->cond.rhs);
+			string lhs_reg = var_manager.stage_and_load_var(lhs_var_ident);
+			string rhs_reg = var_manager.stage_and_load_var(rhs_var_ident, lhs_reg);
+
+			if (!var_manager.get_is_pin_mode()) {
+				// We use this workaround to avoid `on_exit_block` from ignoring
+				// local vars on block exit when is_pin_mode is false
+				string lhs_temp_var_ident = var_manager.get_new_temp_var();
+				string rhs_temp_var_ident = var_manager.get_new_temp_var();
+				string lhs_temp_reg = var_manager.stage_var(lhs_temp_var_ident, lhs_reg, rhs_reg);
+				PUSH_ASM("  mv %s, %s", lhs_temp_reg.c_str(), lhs_reg.c_str());
+				string rhs_temp_reg = var_manager.stage_var(rhs_temp_var_ident, lhs_temp_reg, rhs_reg);
+				PUSH_ASM("  mv %s, %s", rhs_temp_reg.c_str(), rhs_reg.c_str());
+
+				var_manager.release_var_if_temp(lhs_var_ident);
+				var_manager.release_var_if_temp(rhs_var_ident);
+
+				lhs_var_ident = lhs_temp_var_ident;
+				rhs_var_ident = rhs_temp_var_ident;
+				lhs_reg = lhs_temp_reg;
+				rhs_reg = rhs_temp_reg;
+			}
+
+			if (cond_type == KIRT::exp_t::GT) {
+				// Change to LT
+				std::swap(lhs_var_ident, rhs_var_ident);
+				std::swap(lhs_reg, rhs_reg);
+				cond_type = KIRT::exp_t::LT;
+			} else if (cond_type == KIRT::exp_t::LEQ) {
+				// Change to GEQ
+				std::swap(lhs_var_ident, rhs_var_ident);
+				std::swap(lhs_reg, rhs_reg);
+				cond_type = KIRT::exp_t::GEQ;
+			}
+
+			switch (cond_type) {
+				case KIRT::exp_t::EQ: branch_inst_name = "beq"; break;
+				case KIRT::exp_t::NEQ: branch_inst_name = "bne"; break;
+				case KIRT::exp_t::LT: branch_inst_name = "blt"; break;
+				case KIRT::exp_t::GEQ: branch_inst_name = "bge"; break;
+				default: my_assert(19, 0);
+			}
+
+			var_manager.on_exit_block(lhs_reg, rhs_reg);
+			branch_inst_arg = format(
+				"%s, %s",
+				lhs_reg.c_str(),
+				rhs_reg.c_str()
+			);
+			PUSH_ASM("<BRANCH_INST>");
+			var_manager.release_var_if_temp(lhs_var_ident);
+			var_manager.release_var_if_temp(rhs_var_ident);
+		} else {
+			string cond_var_ident = kirt2asm(branch_inst->cond);
+			string cond_reg = var_manager.stage_and_load_var(cond_var_ident);
+			var_manager.on_exit_block(cond_reg);
+			branch_inst_name = "bnez";
+			branch_inst_arg = cond_reg.c_str();
+			PUSH_ASM("<BRANCH_INST>");
+			var_manager.release_var_if_temp(cond_var_ident);
+		}
+		
+		assert(cur_func_asm.back() == "<BRANCH_INST>");
+		cur_func_asm.pop_back();
+
 		// WARN This is not correct
 		// Here, in order to save a `j`, we use `beqz` to jump to the false block
 		// However, if the false block is too far (address delta < -2048 or > 2047,
 		// the assembler will boom). Here we use a simple heuristic to determine
 		// whether to use `beqz` or `bnez`, based on the block id delta
+		string true_block_name = rename_block(branch_inst->true_block->name);
+		string false_block_name = rename_block(branch_inst->false_block->name);
+		string br_target, jmp_target;
 		int block_id_delta = branch_inst->false_block->id - branch_inst->true_block->id;
-		if (block_id_delta <= 20) {
-			PUSH_ASM(
-				"  beqz %s, %s",
-				cond_reg.c_str(),
-				rename_block(branch_inst->false_block->name).c_str()
-			);
-			var_manager.release_var_if_temp(cond_var_ident);
-			PUSH_ASM(
-				"  j %s",
-				rename_block(branch_inst->true_block->name).c_str()
-			);
+		if (block_id_delta > 40) {
+			// Branch to true
+			br_target = true_block_name;
+			jmp_target = false_block_name;
 		} else {
-			PUSH_ASM(
-				"  bnez %s, %s",
-				cond_reg.c_str(),
-				rename_block(branch_inst->true_block->name).c_str()
-			);
-			var_manager.release_var_if_temp(cond_var_ident);
-			PUSH_ASM(
-				"  j %s",
-				rename_block(branch_inst->false_block->name).c_str()
-			);
+			// Branch to false
+			br_target = false_block_name;
+			jmp_target = true_block_name;
+			if (branch_inst_name == "beqz") {
+				branch_inst_name = "bnez";
+			} else if (branch_inst_name == "bnez") {
+				branch_inst_name = "beqz";
+			} else if (branch_inst_name == "beq") {
+				branch_inst_name = "bne";
+			} else if (branch_inst_name == "bne") {
+				branch_inst_name = "beq";
+			} else if (branch_inst_name == "blt") {
+				branch_inst_name = "bge";
+			} else if (branch_inst_name == "bge") {
+				branch_inst_name = "blt";
+			} else {
+				my_assert(19, 0);
+			}
 		}
+
+		PUSH_ASM("  %s %s, %s", branch_inst_name.c_str(), branch_inst_arg.c_str(), br_target.c_str());
+		PUSH_ASM("  j %s", jmp_target.c_str());
 	} else {
 		my_assert(19, 0);
 	}
