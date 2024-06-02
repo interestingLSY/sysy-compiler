@@ -11,7 +11,7 @@ enum class exp_category_t {
 	UNARY
 };
 
-exp_category_t get_exp_category(exp_t type) {
+inline exp_category_t get_exp_category(exp_t type) {
 	switch (type) {
 		case exp_t::NUMBER:
 			return exp_category_t::NUMBER;
@@ -50,7 +50,7 @@ exp_category_t get_exp_category(exp_t type) {
 	}
 }
 
-int calc_exp_val(exp_t type, int lhs, int rhs = 0) {
+inline int calc_exp_val(exp_t type, int lhs, int rhs = 0) {
 	switch (type) {
 		case exp_t::ADDR_ADD:
 		case exp_t::ADD:
@@ -91,6 +91,42 @@ int calc_exp_val(exp_t type, int lhs, int rhs = 0) {
 			return lhs == 0;
 		case exp_t::NEQ0:
 			return lhs != 0;
+		default:
+			assert(0);
+	}
+}
+
+inline bool operator==(const Exp &e1, const Exp &e2) {
+	if (e1.type != e2.type)
+		return false;
+	exp_category_t cat = get_exp_category(e1.type);
+	switch (cat) {
+		case exp_category_t::NUMBER:
+			return e1.number == e2.number;
+		case exp_category_t::SPECIAL: {
+			switch (e1.type) {
+				case exp_t::LVAL:
+					if (e1.lval.is_int() != e2.lval.is_int())
+						return false;
+					if (e1.lval.ident != e2.lval.ident)
+						return false;
+					if (e1.lval.is_int()) return true;
+					else {
+						assert (e1.lval.type.dims() == 1);
+						return e1.lval.indices[0] == e2.lval.indices[0];
+					}
+				case exp_t::FUNC_CALL:
+					return false;
+				case exp_t::ARR_ADDR:
+					return e1.arr_name == e2.arr_name;
+				default:
+					assert(0);
+			}
+		}
+		case exp_category_t::BINARY:
+			return *e1.lhs == *e2.lhs && *e1.rhs == *e2.rhs;
+		case exp_category_t::UNARY:
+			return *e1.lhs == *e2.lhs;
 		default:
 			assert(0);
 	}

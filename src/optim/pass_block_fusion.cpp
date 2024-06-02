@@ -9,7 +9,7 @@
 
 namespace KIRT {
 
-static void pass_block_fusion(Function &func) {
+static void pass_block_fusion(Function &func, bool avoid_while) {
 	int num_blocks = func.blocks.blocks.size();
 
 	vector<shared_ptr<Block>> id2block(num_blocks);
@@ -50,6 +50,8 @@ static void pass_block_fusion(Function &func) {
 		if (outgoing_edges[i].size() == 1) {
 			int v = outgoing_edges[i][0];
 			if (incoming_edges[v].size() == 1) {
+				if (avoid_while && (is_start_with(id2block[i]->name, "while") || is_start_with(id2block[v]->name, "while")))
+					continue;
 				merge_next[i] = true;
 				merge_prev[v] = true;
 			}
@@ -104,10 +106,10 @@ static void pass_block_fusion(Function &func) {
 			100.0 * func.blocks.blocks.size() / num_blocks);
 }
 
-void pass_block_fusion(Program &prog) {
-	fprintf(stderr, "======== Optimization: Block Fusion ========\n");
+void pass_block_fusion(Program &prog, bool avoid_while) {
+	fprintf(stderr, "======== Optimization: Block Fusion%s ========\n", avoid_while ? " (Avoid While)" : "");
 	for (auto &func : prog.funcs)
-		pass_block_fusion(*func);
+		pass_block_fusion(*func, avoid_while);
 }
 
 }

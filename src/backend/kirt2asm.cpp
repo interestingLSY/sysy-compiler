@@ -364,10 +364,10 @@ public:
 		// Copy the argument to my stack frame
 		int offset = var_meta_db[ident].offset;
 		if (kth <= 7) {
-			// We can safely assume offset*4 <= 2047 here since
+			// We can safely assume offset*4 <= 2048 here since
 			// - This func arg  is the first 8 func args
 			// - We always first register the first 8 func args
-			my_assert(34, offset*4 <= 2047);
+			my_assert(34, offset*4 <= 2048);
 			PUSH_ASM("  sw a%d, %d(sp)", kth, -offset*4);
 			// TODO Indeed now this param is displayed by register aX. Write
 			// that info into the library

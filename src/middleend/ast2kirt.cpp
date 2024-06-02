@@ -82,6 +82,10 @@ public:
 		cur_lvl += 1;
 	}
 
+	int get_cur_lvl() {
+		return cur_lvl;
+	}
+
 	// Called when leaving a scope
 	void on_exit_scope() {
 		for (auto &[orig_name, def_metas] : orig_name2def_metas) {
@@ -717,9 +721,10 @@ BlockList ast2kirt(AST::BlockItem &block_item) {
 
 			// Naming
 			string block_id = std::to_string(block_id_counter.next());
-			body_blocks.blocks.front()->name = "body_" + block_id;
-			following_blocks.blocks.front()->name = "awhile_" + block_id;
-			cond_expr_blocks.blocks.front()->name = "while_" + block_id;
+			string block_suffix = "" + block_id + "_lvl_" + std::to_string(var_manager.get_cur_lvl());
+			body_blocks.blocks.front()->name = "while_body_" + block_suffix;
+			following_blocks.blocks.front()->name = "while_after_" + block_suffix;
+			cond_expr_blocks.blocks.front()->name = "while_cond_" + block_suffix;
 
 			// Redirection
 			BlockList res = get_unit_blocklist(cond_expr_blocks.blocks.front());

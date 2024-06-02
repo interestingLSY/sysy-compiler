@@ -4,6 +4,6 @@
 
 namespace KIRT {
 
-void pass_block_fusion(Program &prog, bool avoid_while);
+void pass_scalar_promotion(Program &prog);
 
 }

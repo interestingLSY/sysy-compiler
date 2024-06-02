@@ -77,3 +77,13 @@ inline int log2_floor(int x) {
 	}
 	return res;
 }
+
+inline bool is_start_with(const std::string &str, const std::string &prefix) {
+	return str.compare(0, prefix.size(), prefix) == 0;
+}
+
+inline bool is_end_with(const std::string &str, const std::string &suffix) {
+	if (str.size() < suffix.size()) return false;
+	return str.compare(str.size() - suffix.size(), suffix.size(), suffix) == 0;
+}
+

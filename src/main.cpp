@@ -14,6 +14,7 @@
 #include "optim/pass_block_fusion.h"
 #include "optim/pass_optim_exp_op.h"
 #include "optim/pass_unit_block_elim.h"
+#include "optim/pass_scalar_promotion.h"
 #include "backend/kirt2asm.h"
 
 extern FILE *yyin;
@@ -85,13 +86,20 @@ int main(int argc, const char *argv[]) {
   // fprintf(stderr, "Running pass: collapse arrays...\n");
   KIRT::pass_collapse_arr(kirt);
 
-  KIRT::pass_block_fusion(kirt);
-
+  KIRT::pass_block_fusion(kirt, false);
   KIRT::pass_fill_block_id_name(kirt);  // Fill in id again since block fusion may delete blocks
 
-  KIRT::pass_unit_block_elim(kirt);
-
   KIRT::pass_optim_exp_op(kirt);
+
+  KIRT::pass_scalar_promotion(kirt);
+
+  KIRT::pass_block_fusion(kirt, false);
+  KIRT::pass_fill_block_id_name(kirt);
+
+  // We put unit block elimination after scalar promotion to avoid it from
+  // breaking the loop structure
+  KIRT::pass_unit_block_elim(kirt);
+  KIRT::pass_fill_block_id_name(kirt);  // Same as above
 
   // Print KIR
   if (print_ir) {
