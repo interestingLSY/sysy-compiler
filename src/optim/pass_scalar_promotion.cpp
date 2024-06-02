@@ -98,9 +98,8 @@ static void pass_scalar_promotion(Function &func, Block &cond_block) {
 
 	// Step 2. Collect all modified vars in the current loop
 	// "Modified var" refers to a variable that is assigned (appeared on the
-	// left side of an assignment instruction) in the loop, and is not an array
-	// Can be a local variable / a global variable, or a parameter
-	// TODO Add support for array elements
+	// left side of an assignment instruction) in the loop
+	// Can be a local variable / a global variable / a parameter / an array
 	std::unordered_set<string> modified_vars;
 	for (int i = 0; i < num_blocks; i++) {
 		if (!in_loop[i])
@@ -108,21 +107,13 @@ static void pass_scalar_promotion(Function &func, Block &cond_block) {
 		auto &block = id2block[i];
 		for (auto &inst : block->insts) {
 			if (auto *assign_inst = dynamic_cast<AssignInst*>(inst.get())) {
-				if (assign_inst->lval.is_int())
-					modified_vars.insert(assign_inst->lval.ident);
+				modified_vars.insert(assign_inst->lval.ident);
 			}
 		}
 	}
-	// Invalidate all global vars since they may change upon a function call
 	// TODO Preserve global vars if there is no function call
 	// TODO Preserve global vars if a call to a function does not modify it (need to be propagated)
-	for (auto iter = modified_vars.begin(); iter != modified_vars.end(); ) {
-		if (KIRT::global_decl_map.count(*iter))
-			iter = modified_vars.erase(iter);
-		else
-			iter = std::next(iter);
-	}
-	// Now `modified_vars` contains only local var & parameters
+	// TODO Add support for array elements
 
 	// Step 3. Traverse along each `Exp`. Try our best to promote it
 	// Return (whether pre-calculable, cost-reduction)
@@ -140,6 +131,9 @@ static void pass_scalar_promotion(Function &func, Block &cond_block) {
 			case exp_category_t::SPECIAL: {
 				switch (exp.type) {
 					case exp_t::LVAL: {
+						// Invalidate all global vars / arr since they may change upon a function call
+						if (KIRT::global_decl_map.count(exp.lval.ident))
+							return {false, 0};
 						if (exp.lval.is_int()) {
 							if (modified_vars.count(exp.lval.ident))
 								return {false, 0};
