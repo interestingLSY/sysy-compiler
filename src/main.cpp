@@ -12,6 +12,7 @@
 #include "middleend/pass_collapse_arr.h"
 #include "middleend/pass_fill_block_id_name.h"
 #include "optim/pass_block_fusion.h"
+#include "optim/pass_calc_global_dbs.h"
 #include "optim/pass_optim_exp_op.h"
 #include "optim/pass_unit_block_elim.h"
 #include "optim/pass_scalar_promotion.h"
@@ -89,6 +90,8 @@ int main(int argc, const char *argv[]) {
   KIRT::pass_block_fusion(kirt, false);
   KIRT::pass_fill_block_id_name(kirt);  // Fill in id again since block fusion may delete blocks
 
+  KIRT::pass_calc_global_dbs(kirt);
+  
   KIRT::pass_optim_exp_op(kirt);
 
   KIRT::pass_scalar_promotion(kirt);

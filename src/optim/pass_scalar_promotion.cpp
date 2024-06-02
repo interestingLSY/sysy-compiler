@@ -12,6 +12,7 @@
 
 #include "utils/utils.h"
 #include "middleend/kirt_utils.h"
+#include "optim_dbs.h"
 
 namespace KIRT {
 
@@ -44,6 +45,10 @@ inline int get_binary_exp_cost(exp_t type) {
 		default:
 			assert(0);
 	}
+}
+
+inline int get_array_load_cost() {
+	return 3;
 }
 
 static void pass_scalar_promotion(Function &func, Block &cond_block) {
@@ -111,13 +116,11 @@ static void pass_scalar_promotion(Function &func, Block &cond_block) {
 			}
 		}
 	}
-	// TODO Preserve global vars if there is no function call
-	// TODO Preserve global vars if a call to a function does not modify it (need to be propagated)
 	// TODO Add support for array elements
 
 	// Step 3. Traverse along each `Exp`. Try our best to promote it
 	// Return (whether pre-calculable, cost-reduction)
-	const int COST_THRES = 3;	// Only pre-calculate if the cost reduction >= this threshold
+	const int COST_THRES = 1;	// Only pre-calculate if the cost reduction >= this threshold
 	vector<pair<shared_ptr<Exp>*, int>> precalcable_exps;	// (exp, cost)
 	auto add_precalc_exp = [&](std::shared_ptr<Exp> *exp, int cost) {
 		precalcable_exps.push_back({exp, cost});
@@ -131,7 +134,9 @@ static void pass_scalar_promotion(Function &func, Block &cond_block) {
 			case exp_category_t::SPECIAL: {
 				switch (exp.type) {
 					case exp_t::LVAL: {
-						// Invalidate all global vars / arr since they may change upon a function call
+						// Invalidate all global vars / arr that are modified
+						// TODO Preserve global vars if there is no function call
+						// TODO Preserve global vars if a call to a function does not modify it (need to be propagated)
 						if (KIRT::global_decl_map.count(exp.lval.ident))
 							return {false, 0};
 						if (exp.lval.is_int()) {
@@ -144,15 +149,32 @@ static void pass_scalar_promotion(Function &func, Block &cond_block) {
 							auto [pre_calculable, cost_reduction] = traverse_exp_and_promote(*exp.lval.indices[0]);
 							if (pre_calculable) {
 								add_precalc_exp(&exp.lval.indices[0], cost_reduction);
+								// If an array is not modified in the loop, and it has
+								// never been passed as an argument to a function, we can
+								// pre-calculate it
+								// TODO Use a finer-grained analysis on modification
+								// via argument passing
+								if (!modified_vars.count(exp.lval.ident) && !func2as_arred_params[func.name].count(exp.lval.ident))
+									return {true, get_array_load_cost() + cost_reduction};
+								else
+									return {false, 0};
+							} else {
+								return {false, 0};
 							}
-							// TODO Enable array precalculation
-							return {false, 0};
 						}else {
 							assert(0);
 						}
 					}
-					case exp_t::FUNC_CALL:
+					case exp_t::FUNC_CALL: {
+						bool has_non_pre_calcable_arg = false;
+						for (auto &arg : exp.args) {
+							auto [pre_calculable, cost_reduction] = traverse_exp_and_promote(*arg);
+							if (!pre_calculable) {
+								has_non_pre_calcable_arg = true;
+							}
+						}
 						return {false, 0};
+					}
 					case exp_t::ARR_ADDR:
 						return {true, 0};
 					default:
@@ -196,9 +218,7 @@ static void pass_scalar_promotion(Function &func, Block &cond_block) {
 			if (AssignInst *assign_inst = dynamic_cast<AssignInst*>(inst.get())) {
 				traverse_exp_and_promote(assign_inst->exp);
 				if (assign_inst->lval.is_arr()) {
-					for (auto &index : assign_inst->lval.indices) {
-						traverse_exp_and_promote(*index);
-					}
+					traverse_exp_and_promote(*assign_inst->lval.indices[0]);
 				}
 			} else if (ExpInst *exp_inst = dynamic_cast<ExpInst*>(inst.get())) {
 				traverse_exp_and_promote(exp_inst->exp);

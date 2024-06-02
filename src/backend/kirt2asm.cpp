@@ -729,6 +729,7 @@ list<string> kirt2asm(const KIRT::Function &func) {
 	cur_func_name = func.name;
 	cur_func_asm.clear();
 
+	PUSH_ASM("");
 	PUSH_ASM("  .globl %s", func.name.c_str());
 	PUSH_ASM("%s:", func.name.c_str());
 
