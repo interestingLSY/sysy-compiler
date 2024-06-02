@@ -51,10 +51,11 @@ static void pass_optim_exp_op(Exp &exp) {
 			exp.rhs.reset();
 			num_propagated += 1;
 		} else {
+			if (is_binary_op_commutative(cur_exp_type) && exp.lhs->type == exp_t::NUMBER) {
+				std::swap(exp.lhs, exp.rhs);
+			}
 			// Try to optimize this op
 			if (cur_exp_type == exp_t::MUL) {
-				if (exp.lhs->type == exp_t::NUMBER)
-					std::swap(exp.lhs, exp.rhs);
 				if (exp.rhs->type == exp_t::NUMBER) {
 					int x = exp.rhs->number;
 					int log_x = log2_floor(x);

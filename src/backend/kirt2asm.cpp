@@ -21,6 +21,36 @@ using std::shared_ptr;
 using std::optional, std::nullopt;
 using std::vector;
 
+// Can we use an immediate value in a binary operation?
+inline bool is_binary_op_immediateable(KIRT::exp_t exp_type) {
+	switch (exp_type) {
+		case KIRT::exp_t::ADDR_ADD:
+		case KIRT::exp_t::ADD:
+		case KIRT::exp_t::BITWISE_AND:
+		case KIRT::exp_t::BITWISE_OR:
+		case KIRT::exp_t::BITWISE_XOR:
+		case KIRT::exp_t::SHL:
+		case KIRT::exp_t::SHR:
+		case KIRT::exp_t::SAR:
+		case KIRT::exp_t::LT:
+			return true;
+
+		case KIRT::exp_t::MUL:
+		case KIRT::exp_t::DIV:
+		case KIRT::exp_t::REM:
+		case KIRT::exp_t::GT:
+		case KIRT::exp_t::LEQ:
+		case KIRT::exp_t::GEQ:
+		case KIRT::exp_t::EQ:
+		case KIRT::exp_t::NEQ:
+		case KIRT::exp_t::SUB:	// Should be handled separately by using `addi -X`
+			return false;
+			
+		default:
+			assert(0);
+	}
+}
+
 extern list<string> cur_func_asm;	// Will be defined later in this file
 #define PUSH_ASM(...) cur_func_asm.push_back(format(__VA_ARGS__))
 
@@ -1040,6 +1070,34 @@ string kirt2asm(const KIRT::Exp &exp) {
 		var_manager.release_var_if_temp(lhs_virt_ident);
 		return res_virt_ident;
 	} else {
+		if (exp.rhs->type == KIRT::exp_t::NUMBER) {
+			// Try to use instruction XXXi instead of la + XXX
+			// For example, use addi instead of add
+			int x = exp.rhs->number;
+			KIRT::exp_t imm_type = exp.type;
+			if (exp.type == KIRT::exp_t::SUB) {
+				imm_type = KIRT::exp_t::ADD;
+				x = -x;
+			}
+			if (is_binary_op_immediateable(imm_type) && -2048 <= x && x <= 2047) {
+				// We can use imm
+				auto lhs_virt_ident = kirt2asm(*exp.lhs);
+				auto lhs_reg = var_manager.stage_and_load_var(lhs_virt_ident);
+				string res_virt_ident = var_manager.get_new_temp_var();
+				string res_reg = var_manager.stage_var(res_virt_ident, lhs_reg);
+
+				PUSH_ASM(
+					"  %si %s, %s, %d",
+					kirt_exp_t2asm(imm_type).c_str(),
+					res_reg.c_str(),
+					lhs_reg.c_str(),
+					x
+				);
+				var_manager.on_store(res_virt_ident);
+				var_manager.release_var_if_temp(lhs_virt_ident);
+				return res_virt_ident;
+			}
+		}
 		auto lhs_virt_ident = kirt2asm(*exp.lhs);
 		auto rhs_virt_ident = kirt2asm(*exp.rhs);
 		string lhs_reg = var_manager.stage_and_load_var(lhs_virt_ident);

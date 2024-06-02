@@ -4,6 +4,35 @@
 
 namespace KIRT {
 
+inline bool is_binary_op_commutative(exp_t type) {
+	switch (type) {
+		case exp_t::ADDR_ADD:
+		case exp_t::ADD:
+		case exp_t::MUL:
+		case exp_t::EQ:
+		case exp_t::NEQ:
+		case exp_t::BITWISE_AND:
+		case exp_t::BITWISE_OR:
+		case exp_t::BITWISE_XOR:
+			return true;
+
+		case exp_t::SUB:
+		case exp_t::DIV:
+		case exp_t::REM:
+		case exp_t::LT:
+		case exp_t::GT:
+		case exp_t::LEQ:
+		case exp_t::GEQ:
+		case exp_t::SHL:
+		case exp_t::SHR:
+		case exp_t::SAR:
+			return false;
+		
+		default:
+			assert(0);
+	}
+}
+
 enum class exp_category_t {
 	NUMBER,
 	SPECIAL,	// LVAL, FUNC_CALL, ARR_ADDR
