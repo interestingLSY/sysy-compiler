@@ -923,18 +923,16 @@ void kirt2asm(const shared_ptr<KIRT::TermInst> &inst) {
 		string cond_var_ident = kirt2asm(branch_inst->cond);
 		string cond_reg = var_manager.stage_and_load_var(cond_var_ident, std::nullopt);
 
-		// TODO Now we first store the value of the instruction into a reg, then use
-		// bnez to jump. This can be optimized
 		var_manager.on_exit_block(cond_reg);
 		PUSH_ASM(
-			"  bnez %s, %s",
+			"  beqz %s, %s",
 			cond_reg.c_str(),
-			rename_block(branch_inst->true_block->name).c_str()
+			rename_block(branch_inst->false_block->name).c_str()
 		);
 		var_manager.release_var_if_temp(cond_var_ident);
 		PUSH_ASM(
 			"  j %s",
-			rename_block(branch_inst->false_block->name).c_str()
+			rename_block(branch_inst->true_block->name).c_str()
 		);
 	} else {
 		my_assert(19, 0);
