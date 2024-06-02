@@ -924,16 +924,35 @@ void kirt2asm(const shared_ptr<KIRT::TermInst> &inst) {
 		string cond_reg = var_manager.stage_and_load_var(cond_var_ident, std::nullopt);
 
 		var_manager.on_exit_block(cond_reg);
-		PUSH_ASM(
-			"  beqz %s, %s",
-			cond_reg.c_str(),
-			rename_block(branch_inst->false_block->name).c_str()
-		);
-		var_manager.release_var_if_temp(cond_var_ident);
-		PUSH_ASM(
-			"  j %s",
-			rename_block(branch_inst->true_block->name).c_str()
-		);
+		// WARN This is not correct
+		// Here, in order to save a `j`, we use `beqz` to jump to the false block
+		// However, if the false block is too far (address delta < -2048 or > 2047,
+		// the assembler will boom). Here we use a simple heuristic to determine
+		// whether to use `beqz` or `bnez`, based on the block id delta
+		int block_id_delta = branch_inst->false_block->id - branch_inst->true_block->id;
+		if (block_id_delta <= 20) {
+			PUSH_ASM(
+				"  beqz %s, %s",
+				cond_reg.c_str(),
+				rename_block(branch_inst->false_block->name).c_str()
+			);
+			var_manager.release_var_if_temp(cond_var_ident);
+			PUSH_ASM(
+				"  j %s",
+				rename_block(branch_inst->true_block->name).c_str()
+			);
+		} else {
+			PUSH_ASM(
+				"  bnez %s, %s",
+				cond_reg.c_str(),
+				rename_block(branch_inst->true_block->name).c_str()
+			);
+			var_manager.release_var_if_temp(cond_var_ident);
+			PUSH_ASM(
+				"  j %s",
+				rename_block(branch_inst->false_block->name).c_str()
+			);
+		}
 	} else {
 		my_assert(19, 0);
 	}
