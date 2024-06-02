@@ -159,7 +159,7 @@ private:
 		"s0", "s1", "s2", "s3", "s4", "s5", "s6", "s7", "s8", "s9", "s10", "s11", "t3", "t4", "t5", "t6"
 	};
 	const vector<string> all_caller_saved_regs = {
-		"ra", "a0", "a1", "a2", "a3", "a4", "a5", "a6", "a7", "t0", "t1", "t2"
+		"ra", "t0", "t1", "t2", "a0", "a1", "a2", "a3", "a4", "a5", "a6", "a7"
 	};
 	inline bool is_callee_saved_reg(const string &s) { return s[0] == 'r' || s[0] == 's'; }
 
@@ -984,7 +984,7 @@ string kirt2asm(const KIRT::Exp &exp) {
 		// Place args
 		// After evicting this reg, `arg_virt_ident` won't touch aX registers,
 		// keeping them safe
-		var_manager.manually_evict_reg("ra");
+		var_manager.manually_evict_reg("t2");
 		// Evict this for temp offset calculation if necessary
 		optional<string> arg_addr_temp_reg;
 		for (int i = (int)exp.args.size()-1; i >= 0; i--) {
