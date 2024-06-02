@@ -1300,6 +1300,53 @@ string kirt2asm(const KIRT::Exp &exp, const optional<string> &res_ident_pref) {
 		var_manager.release_var_if_temp(lhs_virt_ident);
 		return res_virt_ident;
 	} else {
+		if (exp.type == KIRT::exp_t::REM &&
+			exp.rhs->type == KIRT::exp_t::NUMBER &&
+			exp.rhs->number == 998244353) {
+			// Optimize %998244353 by hand
+			// (Steal from Clang's codegen)
+			// 
+			// Clang's code for x (in a0) % 998244353
+			// 
+			// lui	a1, 70493
+			// addi	a1, a1, -2031
+			// mulh	a1, a0, a1
+			// srli	a2, a1, 31
+			// srai	a1, a1, 26
+			// add	a1, a1, a2
+			// lui	a2, 243712
+			// addi	a2, a2, 1
+			// mul	a1, a1, a2
+			// sub	a0, a0, a1
+			// ret
+			
+			string lhs_virt_ident = kirt2asm(*exp.lhs);
+			string lhs_reg = var_manager.stage_and_load_var(lhs_virt_ident);
+			string res_ident = res_ident_pref.value_or(var_manager.get_new_temp_var());	// "a1"
+			string res_reg = var_manager.stage_var(res_ident, lhs_reg);
+
+			string temp_virt_ident = var_manager.get_new_temp_var();	// "a2"
+			string temp_reg = var_manager.stage_var(temp_virt_ident, lhs_reg, res_reg);
+
+			PUSH_ASM("  lui %s, 70493", res_reg.c_str());
+			PUSH_ASM("  addi %s, %s, -2031", res_reg.c_str(), res_reg.c_str());
+			PUSH_ASM("  mulh %s, %s, %s", res_reg.c_str(), lhs_reg.c_str(), res_reg.c_str());
+			PUSH_ASM("  srli %s, %s, 31", temp_reg.c_str(), res_reg.c_str());
+			PUSH_ASM("  srai %s, %s, 26", res_reg.c_str(), res_reg.c_str());
+			PUSH_ASM("  add %s, %s, %s", res_reg.c_str(), res_reg.c_str(), temp_reg.c_str());
+
+			PUSH_ASM("  lui %s, 243712", temp_reg.c_str());
+			PUSH_ASM("  addi %s, %s, 1", temp_reg.c_str(), temp_reg.c_str());
+
+			PUSH_ASM("  mul %s, %s, %s", res_reg.c_str(), res_reg.c_str(), temp_reg.c_str());
+			PUSH_ASM("  sub %s, %s, %s", res_reg.c_str(), lhs_reg.c_str(), res_reg.c_str());
+
+			var_manager.on_store(res_ident);
+
+			var_manager.release_var_if_temp(lhs_virt_ident);
+			var_manager.release_var_if_temp(temp_virt_ident);
+			return res_ident;
+		}
 		if (exp.rhs->type == KIRT::exp_t::NUMBER) {
 			// Try to use instruction XXXi instead of la + XXX
 			// For example, use addi instead of add
