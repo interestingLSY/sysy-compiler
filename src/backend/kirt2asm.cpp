@@ -1319,7 +1319,7 @@ string kirt2asm(const KIRT::Exp &exp, const optional<string> &res_ident_pref) {
 			// mul	a1, a1, a2
 			// sub	a0, a0, a1
 			// ret
-			
+
 			string lhs_virt_ident = kirt2asm(*exp.lhs);
 			string lhs_reg = var_manager.stage_and_load_var(lhs_virt_ident);
 			string res_ident = res_ident_pref.value_or(var_manager.get_new_temp_var());	// "a1"
@@ -1345,6 +1345,53 @@ string kirt2asm(const KIRT::Exp &exp, const optional<string> &res_ident_pref) {
 
 			var_manager.release_var_if_temp(lhs_virt_ident);
 			var_manager.release_var_if_temp(temp_virt_ident);
+			return res_ident;
+		}
+		if (exp.type == KIRT::exp_t::DIV &&
+			exp.rhs->type == KIRT::exp_t::NUMBER &&
+			exp.rhs->number == 30) {
+			// Optimize /30 by hand
+			// (Steal from Clang's codegen)
+			// 
+			// Clang's code for x (in a0) % 998244353
+			// lui	a1, 559241
+			// addi	a1, a1, -1911
+			// mulh	a1, a0, a1
+			// add	a0, a1, a0
+			// srli	a1, a0, 31
+			// srai	a0, a0, 4
+			// add	a0, a0, a1
+			// ret
+
+			string lhs_virt_ident = kirt2asm(*exp.lhs);
+			string lhs_reg = var_manager.stage_and_load_var(lhs_virt_ident);
+			string res_ident = res_ident_pref.value_or(var_manager.get_new_temp_var());	// "a1"
+			string res_reg = var_manager.stage_var(res_ident, lhs_reg);
+
+			string temp_virt_ident;
+			string temp_reg;
+			if (is_start_with(lhs_virt_ident, "~temp")) {
+				temp_virt_ident = lhs_virt_ident;
+				temp_reg = lhs_reg;
+			} else {
+				temp_virt_ident = var_manager.get_new_temp_var();
+				temp_reg = var_manager.stage_var(temp_virt_ident, lhs_reg, res_reg);
+			}
+
+			PUSH_ASM("  lui %s, 559241", res_reg.c_str());
+			PUSH_ASM("  addi %s, %s, -1911", res_reg.c_str(), res_reg.c_str());
+			PUSH_ASM("  mulh %s, %s, %s", res_reg.c_str(), lhs_reg.c_str(), res_reg.c_str());
+			PUSH_ASM("  add %s, %s, %s", temp_reg.c_str(), res_reg.c_str(), lhs_reg.c_str());
+			PUSH_ASM("  srli %s, %s, 31", res_reg.c_str(), temp_reg.c_str());
+			PUSH_ASM("  srai %s, %s, 4", temp_reg.c_str(), temp_reg.c_str());
+			PUSH_ASM("  add %s, %s, %s", res_reg.c_str(), temp_reg.c_str(), res_reg.c_str());
+
+			var_manager.on_store(res_ident);
+
+			var_manager.release_var_if_temp(lhs_virt_ident);
+			if (temp_virt_ident != lhs_virt_ident) {
+				var_manager.release_var_if_temp(temp_virt_ident);
+			}
 			return res_ident;
 		}
 		if (exp.rhs->type == KIRT::exp_t::NUMBER) {
