@@ -97,6 +97,11 @@ private:
 		int size;	// Size of the array, in words
 	};
 
+	struct ParamMeta {
+		int var_offset;
+		int kth;
+	};
+
 	Counter temp_var_counter;
 
 	// The current number of elements (ints) on the stack
@@ -112,7 +117,7 @@ private:
 
 	int num_pinnable_vars;
 	bool is_pin_mode;
-	std::unordered_set<string> params_list;
+	std::unordered_map<string, ParamMeta> param_db;
 
 	void _register_var(const string &ident, var_t type) {
 		num_pinnable_vars += 1;
@@ -334,7 +339,7 @@ public:
 
 		num_pinnable_vars = 0;
 		is_pin_mode = false;
-		params_list.clear();
+		param_db.clear();
 
 		cur_timestamp_cnter.reset();
 		used_callee_saved_regs.clear();
@@ -390,22 +395,9 @@ public:
 		} else {
 			assert(0);
 		}
-		params_list.insert(ident);
 		// Copy the argument to my stack frame
 		int offset = var_meta_db[ident].offset;
-		if (kth <= 7) {
-			// We can safely assume offset*4 <= 2048 here since
-			// - This func arg  is the first 8 func args
-			// - We always first register the first 8 func args
-			my_assert(34, offset*4 <= 2048);
-			PUSH_ASM("  sw a%d, %d(sp)", kth, -offset*4);
-			// TODO Indeed now this param is displayed by register aX. Write
-			// that info into the library
-		} else {
-			manually_evict_reg("t1");
-			PUSH_ASM("  lw t1, %d(sp)", 4*(kth-8));
-			PUSH_ASM("  sw t1, %d(sp)", -offset*4);
-		}
+		param_db[ident] = {offset, kth};
 	}
 
 	// Register a local variable
@@ -452,8 +444,19 @@ public:
 					const ArrayMeta &arr_meta = local_arr_meta_db[ident.substr(0, ident.size()-5)];
 					PUSH_ASM("  li %s, %d", reg.c_str(), -arr_meta.space_offset*4);
 					PUSH_ASM("  add %s, sp, %s", reg.c_str(), reg.c_str());
-				} else if (meta.type == var_t::LOCAL_VAR && !params_list.count(ident)) {
+				} else if (meta.type == var_t::LOCAL_VAR && !param_db.count(ident)) {
 					// A local variable. No need to load
+				} else if (meta.type == var_t::LOCAL_VAR && param_db.count(ident)) {
+					// A parameter. If its kth >= 8 we need to load it from the stack
+					ParamMeta &param_meta = param_db[ident];
+					if (param_meta.kth >= 8) {
+						PUSH_ASM("  lw %s, %d(sp)", reg.c_str(), 4*(param_meta.kth-8));
+					} else {
+						string src_reg = format("a%d", param_meta.kth);
+						if (src_reg != reg) {
+							PUSH_ASM("  mv %s, %s", reg.c_str(), src_reg.c_str());
+						}
+					}
 				} else {
 					load_var_to_reg_simple(ident, reg);
 				}
@@ -465,6 +468,23 @@ public:
 				PUSH_ASM("  li %s, %d", arr_addr_reg.c_str(), -meta.space_offset*4);
 				PUSH_ASM("  add %s, sp, %s", arr_addr_reg.c_str(), arr_addr_reg.c_str());
 				on_store(ident + "#addr");
+			}
+			for (auto &[ident, meta] : param_db) {
+				int kth = meta.kth;
+				int offset = meta.var_offset;
+				if (kth <= 7) {
+					// We can safely assume offset*4 <= 2048 here since
+					// - This func arg  is the first 8 func args
+					// - We always first register the first 8 func args
+					my_assert(34, offset*4 <= 2048);
+					PUSH_ASM("  sw a%d, %d(sp)", kth, -offset*4);
+					// TODO Indeed now this param is displayed by register aX. Write
+					// that info into the library
+				} else {
+					manually_evict_reg("t1");
+					PUSH_ASM("  lw t1, %d(sp)", 4*(kth-8));
+					PUSH_ASM("  sw t1, %d(sp)", -offset*4);
+				}
 			}
 		}
 	}
