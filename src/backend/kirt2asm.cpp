@@ -686,7 +686,7 @@ list<string> kirt2asm(const KIRT::Function &func);
 void kirt2asm(const KIRT::Block &block);
 void kirt2asm(const shared_ptr<KIRT::Inst> &inst);
 void kirt2asm(const shared_ptr<KIRT::TermInst> &inst);
-string kirt2asm(const KIRT::Exp &inst);
+string kirt2asm(const KIRT::Exp &inst, const optional<string> &res_reg_suggestion = nullopt);
 
 list<string> kirt2asm(const KIRT::Program &prog) {
 	list<string> res;
@@ -872,15 +872,17 @@ void kirt2asm(const KIRT::Block &block) {
 
 void kirt2asm(const shared_ptr<KIRT::Inst> &inst) {
 	if (const KIRT::AssignInst *assign_inst = dynamic_cast<const KIRT::AssignInst *>(inst.get())) {
-		string exp_var_ident = kirt2asm(assign_inst->exp);
 		if (assign_inst->lval.is_int()) {
+			string exp_var_ident = kirt2asm(assign_inst->exp, assign_inst->lval.ident);
 			string exp_reg = var_manager.stage_and_load_var(exp_var_ident);
 			string lval_reg = var_manager.stage_var(assign_inst->lval.ident, exp_reg);
 			if (lval_reg != exp_reg) {
 				PUSH_ASM("  mv %s, %s", lval_reg.c_str(), exp_reg.c_str());
 			}
 			var_manager.on_store(assign_inst->lval.ident);
+			var_manager.release_var_if_temp(exp_var_ident);
 		} else if (assign_inst->lval.is_arr()) {
+			string exp_var_ident = kirt2asm(assign_inst->exp);
 			assert(assign_inst->lval.type.dims() == 1);
 			string index_var_ident = kirt2asm(*assign_inst->lval.indices[0]);
 			string index_reg = var_manager.stage_and_load_var(index_var_ident);
@@ -891,17 +893,17 @@ void kirt2asm(const shared_ptr<KIRT::Inst> &inst) {
 			string item_addr_reg = var_manager.stage_var(item_addr_temp_var, index_reg, arr_addr_reg);
 			
 			PUSH_ASM("  add %s, %s, %s", item_addr_reg.c_str(), arr_addr_reg.c_str(), index_reg.c_str());
+			var_manager.release_var_if_temp(index_var_ident);
 			var_manager.on_store(item_addr_temp_var);
 
 			string exp_reg = var_manager.stage_and_load_var(exp_var_ident, item_addr_reg);
 			PUSH_ASM("  sw %s, 0(%s)", exp_reg.c_str(), item_addr_reg.c_str());
 
-			var_manager.release_var_if_temp(index_var_ident);
 			var_manager.release_var_if_temp(item_addr_temp_var);
+			var_manager.release_var_if_temp(exp_var_ident);
 		} else {
 			my_assert(18, 0);
 		}
-		var_manager.release_var_if_temp(exp_var_ident);
 	} else if (const KIRT::ExpInst *exp_inst = dynamic_cast<const KIRT::ExpInst *>(inst.get())) {
 		string exp_var_ident = kirt2asm(exp_inst->exp);
 		var_manager.release_var_if_temp(exp_var_ident);
@@ -1055,7 +1057,9 @@ void kirt2asm(const shared_ptr<KIRT::TermInst> &inst) {
 }
 
 // Return: the (possibly temp) variable name
-string kirt2asm(const KIRT::Exp &exp) {
+// The result will be put into res_ident_pref (pref = preference) if provided
+// (this is not guaranteed. The returned ident may not be the same as res_ident_pref)
+string kirt2asm(const KIRT::Exp &exp, const optional<string> &res_ident_pref) {
 	if (exp.type == KIRT::exp_t::LVAL) {
 		if (exp.lval.is_int()) {
 			string ident = exp.lval.ident;
@@ -1067,7 +1071,7 @@ string kirt2asm(const KIRT::Exp &exp) {
 
 			string arr_addr_reg = var_manager.load_arr_addr_to_reg(exp.lval.ident, index_reg);
 
-			string res_virt_ident = var_manager.get_new_temp_var();
+			string res_virt_ident = res_ident_pref.value_or(var_manager.get_new_temp_var());
 			string res_reg = var_manager.stage_var(res_virt_ident, index_reg, arr_addr_reg);
 			PUSH_ASM("  add %s, %s, %s", res_reg.c_str(), index_reg.c_str(), arr_addr_reg.c_str());
 			PUSH_ASM("  lw %s, 0(%s)", res_reg.c_str(), res_reg.c_str());
@@ -1173,7 +1177,7 @@ string kirt2asm(const KIRT::Exp &exp) {
 		}
 
 		// Save the return value
-		string res_virt_ident = var_manager.get_new_temp_var();
+		string res_virt_ident = res_ident_pref.value_or(var_manager.get_new_temp_var());
 		string res_reg = var_manager.stage_var(res_virt_ident);
 		if (res_reg != "a0")
 			PUSH_ASM("  mv %s, a0", res_reg.c_str());
@@ -1185,7 +1189,7 @@ string kirt2asm(const KIRT::Exp &exp) {
 		if (exp.number == 0) {
 			return "0";
 		}
-		string res_virt_ident = var_manager.get_new_temp_var();
+		string res_virt_ident = res_ident_pref.value_or(var_manager.get_new_temp_var());
 		string res_reg = var_manager.stage_var(res_virt_ident);
 		PUSH_ASM("  li %s, %d", res_reg.c_str(), exp.number);
 		var_manager.on_store(res_virt_ident);
@@ -1193,7 +1197,7 @@ string kirt2asm(const KIRT::Exp &exp) {
 	} else if (exp.type == KIRT::exp_t::EQ0 || exp.type == KIRT::exp_t::NEQ0) {
 		string lhs_virt_ident = kirt2asm(*exp.lhs);
 		string lhs_reg = var_manager.stage_and_load_var(lhs_virt_ident);
-		string res_virt_ident = var_manager.get_new_temp_var();
+		string res_virt_ident = res_ident_pref.value_or(var_manager.get_new_temp_var());
 		string res_reg = var_manager.stage_var(res_virt_ident, lhs_reg);
 
 		PUSH_ASM(
@@ -1219,7 +1223,7 @@ string kirt2asm(const KIRT::Exp &exp) {
 				// We can use imm
 				auto lhs_virt_ident = kirt2asm(*exp.lhs);
 				auto lhs_reg = var_manager.stage_and_load_var(lhs_virt_ident);
-				string res_virt_ident = var_manager.get_new_temp_var();
+				string res_virt_ident = res_ident_pref.value_or(var_manager.get_new_temp_var());
 				string res_reg = var_manager.stage_var(res_virt_ident, lhs_reg);
 
 				PUSH_ASM(
@@ -1238,7 +1242,7 @@ string kirt2asm(const KIRT::Exp &exp) {
 		auto rhs_virt_ident = kirt2asm(*exp.rhs);
 		string lhs_reg = var_manager.stage_and_load_var(lhs_virt_ident);
 		string rhs_reg = var_manager.stage_and_load_var(rhs_virt_ident, lhs_reg);
-		string res_virt_ident = var_manager.get_new_temp_var();
+		string res_virt_ident = res_ident_pref.value_or(var_manager.get_new_temp_var());
 		string res_reg = var_manager.stage_var(res_virt_ident, lhs_reg, rhs_reg);
 
 		PUSH_ASM(
