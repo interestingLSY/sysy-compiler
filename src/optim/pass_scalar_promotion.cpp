@@ -47,8 +47,14 @@ inline int get_binary_exp_cost(exp_t type) {
 	}
 }
 
-inline int get_array_load_cost() {
-	return 3;
+static constexpr int COST_THRES = 1;	// Only pre-calculate if the cost reduction >= this threshold
+static constexpr int ARRAY_LOAD_COST = 3;
+static constexpr int FUNC_CALL_COST = 100;
+
+bool is_library_func(const string &func_name) {
+	return func_name == "getint" || func_name == "getch" || func_name == "getarray" || \
+			func_name == "putint" || func_name == "putch" || func_name == "putarray"|| \
+			func_name == "starttime" || func_name == "stoptime";
 }
 
 static void pass_scalar_promotion(Function &func, Block &cond_block) {
@@ -120,11 +126,12 @@ static void pass_scalar_promotion(Function &func, Block &cond_block) {
 
 	// Step 3. Traverse along each `Exp`. Try our best to promote it
 	// Return (whether pre-calculable, cost-reduction)
-	const int COST_THRES = 1;	// Only pre-calculate if the cost reduction >= this threshold
+
 	vector<pair<shared_ptr<Exp>*, int>> precalcable_exps;	// (exp, cost)
 	auto add_precalc_exp = [&](std::shared_ptr<Exp> *exp, int cost) {
 		precalcable_exps.push_back({exp, cost});
 	};
+
 	std::function<pair<bool, int>(Exp&)> traverse_exp_and_promote = [&](Exp &exp) -> pair<bool, int> {
 		exp_category_t exp_category = get_exp_category(exp.type);
 		switch (exp_category) {
@@ -148,16 +155,17 @@ static void pass_scalar_promotion(Function &func, Block &cond_block) {
 							assert(exp.lval.indices.size() == 1);	// Only support 1D array
 							auto [pre_calculable, cost_reduction] = traverse_exp_and_promote(*exp.lval.indices[0]);
 							if (pre_calculable) {
-								add_precalc_exp(&exp.lval.indices[0], cost_reduction);
 								// If an array is not modified in the loop, and it has
 								// never been passed as an argument to a function, we can
 								// pre-calculate it
 								// TODO Use a finer-grained analysis on modification
 								// via argument passing
 								if (!modified_vars.count(exp.lval.ident) && !func2as_arred_params[func.name].count(exp.lval.ident))
-									return {true, get_array_load_cost() + cost_reduction};
-								else
+									return {true, cost_reduction + ARRAY_LOAD_COST};
+								else {
+									add_precalc_exp(&exp.lval.indices[0], cost_reduction);
 									return {false, 0};
+								}
 							} else {
 								return {false, 0};
 							}
@@ -167,12 +175,46 @@ static void pass_scalar_promotion(Function &func, Block &cond_block) {
 					}
 					case exp_t::FUNC_CALL: {
 						bool has_non_pre_calcable_arg = false;
+						int cost_reduction_sum = 0;
 						for (auto &arg : exp.args) {
 							auto [pre_calculable, cost_reduction] = traverse_exp_and_promote(*arg);
+							cost_reduction_sum += cost_reduction;
 							if (!pre_calculable) {
 								has_non_pre_calcable_arg = true;
+							} else if (has_non_pre_calcable_arg) {
+								// For convenience we only add precalc exps after
+								// the first non-precalcable arg
+								// TODO Optimize this by considering all
+								// pre-calcable args
+								add_precalc_exp(&arg, cost_reduction);
 							}
 						}
+						bool indirect_call_lib_func = false;
+						if (!is_library_func(exp.func_name)) {
+							for (const string &callee : KIRT::func2callees[exp.func_name]) {
+								if (is_library_func(callee)) {
+									indirect_call_lib_func = true;
+									break;
+								}
+							}
+						}
+						if (!has_non_pre_calcable_arg && KIRT::func2modified_global_arrs[exp.func_name].empty() && !is_library_func(exp.func_name) && !indirect_call_lib_func) {
+							// If the function and all functions it calls does not
+							// touch global vars, and it does not have any array
+							// arguments, we can pre-calculate it
+							bool have_arr_arg = false;
+							shared_ptr<Function> callee = KIRT::func_map[exp.func_name];
+							for (const FuncFParam &param : callee->fparams) {
+								if (param.type.is_arr()) {
+									have_arr_arg = true;
+									break;
+								}
+							}
+							if (!have_arr_arg) {
+								return {true, cost_reduction_sum + FUNC_CALL_COST};
+							}
+						}
+						// TODO Push all pre-calculable args
 						return {false, 0};
 					}
 					case exp_t::ARR_ADDR:
