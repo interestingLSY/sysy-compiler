@@ -1,7 +1,7 @@
 // Pass Optimize Exp Ops: Replace heavy ops (e.g. mul/div/rem) with lighter ops
 // (e.g. shl/shr) if possible
 
-#include "pass_block_fusion.h"
+#include "pass_optim_exp_op.h"
 
 #include <cassert>
 #include <unordered_map>
