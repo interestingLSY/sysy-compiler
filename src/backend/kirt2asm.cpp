@@ -298,34 +298,49 @@ private:
 	string get_one_free_reg(
 		const vector<string> &candidates,
 		const std::optional<string> &hold_reg1 = std::nullopt,
-		const std::optional<string> &hold_reg2 = std::nullopt
+		const std::optional<string> &hold_reg2 = std::nullopt,
+		std::optional<string> preference = std::nullopt
 	) {
 		optional<string> result_reg = nullopt;
-		for (const string &reg : candidates) {
-			// NOTE Under some scenarios, we may want to hold some registers even
-			// they are free. Examples including returning from function calls
-			if (hold_reg1.has_value() && hold_reg1.value() == reg) continue;
-			if (hold_reg2.has_value() && hold_reg2.value() == reg) continue;
-			if (!reg2var.count(reg)) {
-				result_reg = reg;
-				break;
-			}
-		}
-		if (!result_reg.has_value()) {
-			// Must evict one register
-			int least_lru = INT_MAX;
+		if ((preference && hold_reg1 && preference.value() == hold_reg1.value()) || 
+			(preference && hold_reg2 && preference.value() == hold_reg2.value()))
+			// `preference` is held by `hold_reg1` or `hold_reg2`. Ignore it
+			preference = nullopt;
+
+		if (preference && !reg2var.count(preference.value())) {
+			// The preferred register is free
+			result_reg = preference;
+		} else {
 			for (const string &reg : candidates) {
+				// NOTE Under some scenarios, we may want to hold some registers even
+				// they are free. Examples including returning from function calls
 				if (hold_reg1.has_value() && hold_reg1.value() == reg) continue;
 				if (hold_reg2.has_value() && hold_reg2.value() == reg) continue;
-				string &ident = reg2var[reg];
-				VarMeta &meta = var_meta_db[ident];
-				if (meta.last_use_timestamp < least_lru) {
+				if (!reg2var.count(reg)) {
 					result_reg = reg;
-					least_lru = meta.last_use_timestamp;
+					break;
 				}
 			}
-			// Evict `result_reg`
-			evict_reg(result_reg.value());
+			if (!result_reg.has_value()) {
+				if (preference && std::count(candidates.begin(), candidates.end(), preference.value())) {
+					result_reg = preference;
+				} else {
+					// Must evict one register
+					int least_lru = INT_MAX;
+					for (const string &reg : candidates) {
+						if (hold_reg1.has_value() && hold_reg1.value() == reg) continue;
+						if (hold_reg2.has_value() && hold_reg2.value() == reg) continue;
+						string &ident = reg2var[reg];
+						VarMeta &meta = var_meta_db[ident];
+						if (meta.last_use_timestamp < least_lru) {
+							result_reg = reg;
+							least_lru = meta.last_use_timestamp;
+						}
+					}
+				}
+				// Evict `result_reg`
+				evict_reg(result_reg.value());
+			}
 		}
 		add_used_reg(result_reg.value());
 		return result_reg.value();
@@ -633,10 +648,12 @@ public:
 	}
 
 	// Allocate a register for a variable and build their connection
+	// Will put the variable into `preference` if provided and the var is not staged
 	string stage_var(
 		const string &ident,
 		const std::optional<string> &hold_reg1 = std::nullopt,
-		const std::optional<string> &hold_reg2 = std::nullopt
+		const std::optional<string> &hold_reg2 = std::nullopt,
+		const std::optional<string> &preference = std::nullopt
 	) {
 		if (ident == "0") {
 			return "x0";
@@ -652,7 +669,8 @@ public:
 					is_temp_var(ident) ?
 					(is_leaf_func ? leaf_func_temp_var_regs : all_caller_saved_regs) :
 					(is_leaf_func ? leaf_func_local_var_regs : all_callee_saved_regs),
-					hold_reg1, hold_reg2
+					hold_reg1, hold_reg2,
+					preference
 				);
 				meta.corresp_reg = target;
 				meta.is_dirty = false;
@@ -670,7 +688,8 @@ public:
 	string stage_and_load_var(
 		const string &ident,
 		const std::optional<string> &hold_reg1 = std::nullopt,
-		const std::optional<string> &hold_reg2 = std::nullopt
+		const std::optional<string> &hold_reg2 = std::nullopt,
+		const std::optional<string> &preference = std::nullopt
 	) {
 		if (ident == "0") {
 			return "x0";
@@ -685,10 +704,10 @@ public:
 				load_var_to_reg_simple(ident, meta.corresp_reg.value());
 				meta.last_use_timestamp = 0;
 			}
-			return stage_var(ident, hold_reg1, hold_reg2);
+			return stage_var(ident, hold_reg1, hold_reg2, preference);
 		} else {
 			if (!meta.corresp_reg.has_value()) {
-				string target = stage_var(ident, hold_reg1, hold_reg2);
+				string target = stage_var(ident, hold_reg1, hold_reg2, preference);
 				load_var_to_reg_simple(ident, target);
 			}
 			return meta.corresp_reg.value();
@@ -1004,7 +1023,7 @@ void kirt2asm(const shared_ptr<KIRT::TermInst> &inst) {
 	if (const KIRT::ReturnInst *ret_inst = dynamic_cast<const KIRT::ReturnInst *>(inst.get())) {
 		if (ret_inst->ret_exp) {
 			string exp_var_ident = kirt2asm(*ret_inst->ret_exp);
-			string exp_reg = var_manager.stage_and_load_var(exp_var_ident, std::nullopt);
+			string exp_reg = var_manager.stage_and_load_var(exp_var_ident);
 			if (exp_reg != "a0") {
 				var_manager.clear_reg_a0_before_return();
 				PUSH_ASM("  mv a0, %s", exp_reg.c_str());
@@ -1191,11 +1210,14 @@ string kirt2asm(const KIRT::Exp &exp, const optional<string> &res_ident_pref) {
 		// Place args
 		// After evicting this reg, `arg_virt_ident` won't touch aX registers,
 		// keeping them safe
-		var_manager.manually_evict_reg("t1");
-		// Evict this for temp offset calculation if necessary
-		string arg_addr_temp_reg = "t2";
+
+		string arg_addr_temp_reg = "ra";
 		if (num_args > 8) {
-			var_manager.manually_evict_reg(arg_addr_temp_reg);
+			// Evict this for temp offset calculation if necessary
+			var_manager.manually_evict_reg("t2");
+			var_manager.manually_evict_reg("ra");
+		} else {
+			var_manager.manually_evict_reg("ra");
 		}
 		for (int i = (int)exp.args.size()-1; i >= 0; i--) {
 			// We perform this backwards to avoid overwriting the aX registers
@@ -1204,10 +1226,10 @@ string kirt2asm(const KIRT::Exp &exp, const optional<string> &res_ident_pref) {
 				var_manager.manually_evict_reg("t1");
 				var_manager.manually_evict_reg(arg_addr_temp_reg);
 			}
-			string arg_reg = var_manager.stage_and_load_var(arg_virt_ident);
 			if (i <= 7) {
 				// Save the argument to the register
 				string target = format("a%d", i);
+				string arg_reg = var_manager.stage_and_load_var(arg_virt_ident, nullopt, nullopt, target);
 				if (arg_reg != target) {
 					var_manager.manually_evict_reg(target);
 					PUSH_ASM(
@@ -1217,6 +1239,7 @@ string kirt2asm(const KIRT::Exp &exp, const optional<string> &res_ident_pref) {
 					);
 				}
 			} else {
+				string arg_reg = var_manager.stage_and_load_var(arg_virt_ident);
 				// Save the argument to the stack
 				PUSH_ASM(
 					"  li %s, %d",
@@ -1268,7 +1291,7 @@ string kirt2asm(const KIRT::Exp &exp, const optional<string> &res_ident_pref) {
 
 		// Save the return value
 		string res_virt_ident = res_ident_pref.value_or(var_manager.get_new_temp_var());
-		string res_reg = var_manager.stage_var(res_virt_ident);
+		string res_reg = var_manager.stage_var(res_virt_ident, nullopt, nullopt, "a0");
 		if (res_reg != "a0")
 			PUSH_ASM("  mv %s, a0", res_reg.c_str());
 		var_manager.on_store(res_virt_ident);
