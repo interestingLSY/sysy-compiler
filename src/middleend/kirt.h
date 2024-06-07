@@ -71,6 +71,8 @@ struct LVal {
 	static LVal make_arr(const string &ident, const vector<int> &shape, const vector<shared_ptr<Exp>> &indices) {
 		return LVal{ident, Type{type_t::ARR, shape}, indices};
 	}
+
+	LVal clone() const;
 };
 
 enum class exp_t {
@@ -137,6 +139,7 @@ public:
 
 	Exp() = default;
 	Exp(int x) : type(exp_t::NUMBER), number(x) {}
+	Exp clone() const;
 };
 
 
@@ -144,17 +147,22 @@ public:
 class Inst {
 public:
 	virtual ~Inst() = default;	// Make Inst polymorphic
+	virtual shared_ptr<Inst> clone() const = 0;
 };
 
 class AssignInst : public Inst {
 public:
 	LVal lval;
 	Exp exp;
+
+	shared_ptr<Inst> clone() const;
 };
 
 class ExpInst : public Inst {
 public:
 	Exp exp;
+
+	shared_ptr<Inst> clone() const;
 };
 
 
@@ -167,6 +175,8 @@ public:
 class TermInst {
 public:
 	virtual ~TermInst() = default;	// Make TermInst polymorphic
+
+	virtual shared_ptr<TermInst> clone() const = 0;
 };
 
 class BranchInst : public TermInst {
@@ -174,6 +184,8 @@ public:
 	Exp cond;
 	std::shared_ptr<Block> true_block;
 	std::shared_ptr<Block> false_block;
+
+	shared_ptr<TermInst> clone() const;
 };
 
 enum class jump_inst_t {
@@ -185,11 +197,15 @@ class JumpInst : public TermInst {
 public:
 	jump_inst_t type = jump_inst_t::NORMAL;	// The type of the jump instruction. It affects jump relocation
 	std::shared_ptr<Block> target_block;
+
+	shared_ptr<TermInst> clone() const;
 };
 
 class ReturnInst : public TermInst {
 public:
 	std::shared_ptr<Exp> ret_exp;	// is nullptr if the function returns void
+
+	shared_ptr<TermInst> clone() const;
 };
 
 // Block - A basic block
@@ -200,6 +216,8 @@ public:
 	string name;	// An optional name. Will be generated automatically if not provided
 	list<std::shared_ptr<Inst>> insts;
 	std::shared_ptr<TermInst> term_inst;
+
+	Block clone() const;
 };
 
 
@@ -240,6 +258,8 @@ class BlockList {
 public:
 	// The first block will be considered as the entry block
 	list<std::shared_ptr<Block>> blocks;
+	
+	BlockList clone() const;
 };
 
 

@@ -793,7 +793,7 @@ inline string rename_block(const string &block_name) {
 list<string> kirt2asm(const KIRT::Function &func);
 void kirt2asm(const KIRT::Block &block);
 void kirt2asm(const shared_ptr<KIRT::Inst> &inst);
-void kirt2asm(const shared_ptr<KIRT::TermInst> &inst);
+void kirt2asm(const KIRT::Block &cur_block, const shared_ptr<KIRT::TermInst> &inst);
 string kirt2asm(const KIRT::Exp &inst, const optional<string> &res_reg_suggestion = nullopt);
 
 list<string> kirt2asm(const KIRT::Program &prog) {
@@ -974,7 +974,7 @@ void kirt2asm(const KIRT::Block &block) {
 		kirt2asm(inst);
 	}
 
-	kirt2asm(block.term_inst);
+	kirt2asm(block, block.term_inst);
 }
 
 void kirt2asm(const shared_ptr<KIRT::Inst> &inst) {
@@ -1019,7 +1019,7 @@ void kirt2asm(const shared_ptr<KIRT::Inst> &inst) {
 	}
 }
 
-void kirt2asm(const shared_ptr<KIRT::TermInst> &inst) {
+void kirt2asm(const KIRT::Block &cur_block, const shared_ptr<KIRT::TermInst> &inst) {
 	if (const KIRT::ReturnInst *ret_inst = dynamic_cast<const KIRT::ReturnInst *>(inst.get())) {
 		if (ret_inst->ret_exp) {
 			string exp_var_ident = kirt2asm(*ret_inst->ret_exp);
@@ -1133,7 +1133,7 @@ void kirt2asm(const shared_ptr<KIRT::TermInst> &inst) {
 		string false_block_name = rename_block(branch_inst->false_block->name);
 		string br_target, jmp_target;
 		int block_id_delta = branch_inst->false_block->id - branch_inst->true_block->id;
-		if (block_id_delta > 40) {
+		if (block_id_delta > 40 || branch_inst->false_block->id == cur_block.id + 1) {
 			// Branch to true
 			br_target = true_block_name;
 			jmp_target = false_block_name;

@@ -715,7 +715,8 @@ BlockList ast2kirt(AST::BlockItem &block_item) {
 			AST::WhileStmt *while_stmt = dynamic_cast<AST::WhileStmt *>(cur_item);
 
 			// KIRT generation
-			auto [cond_expr, cond_expr_blocks] = ast2kirt(*while_stmt->cond);
+			auto [cond_expr2, cond_expr_blocks2] = ast2kirt(*while_stmt->cond);
+			auto [cond_expr1, cond_expr_blocks1] = ast2kirt(*while_stmt->cond);
 			BlockList body_blocks = ast2kirt_stmt_or_block(while_stmt->body);
 			BlockList following_blocks = block_item.recur ? ast2kirt(*block_item.recur) : get_unit_blocklist();
 
@@ -724,24 +725,31 @@ BlockList ast2kirt(AST::BlockItem &block_item) {
 			string block_suffix = "" + block_id + "_lvl_" + std::to_string(var_manager.get_cur_lvl());
 			body_blocks.blocks.front()->name = "while_body_" + block_suffix;
 			following_blocks.blocks.front()->name = "while_after_" + block_suffix;
-			cond_expr_blocks.blocks.front()->name = "while_cond_" + block_suffix;
+			cond_expr_blocks1.blocks.front()->name = "while_cond1_" + block_suffix;
+			cond_expr_blocks2.blocks.front()->name = "while_cond2_" + block_suffix;
 
 			// Redirection
-			BlockList res = get_unit_blocklist(cond_expr_blocks.blocks.front());
-			fill_in_empty_terminst_target(body_blocks, cond_expr_blocks.blocks.front());
+			BlockList res = get_unit_blocklist(cond_expr_blocks1.blocks.front());
+			fill_in_empty_terminst_target(body_blocks, cond_expr_blocks2.blocks.front());
 			fill_in_empty_terminst_target(body_blocks, following_blocks.blocks.front(), jump_inst_t::BREAK);
-			fill_in_empty_terminst_target(body_blocks, cond_expr_blocks.blocks.front(), jump_inst_t::CONTINUE);
+			fill_in_empty_terminst_target(body_blocks, cond_expr_blocks2.blocks.front(), jump_inst_t::CONTINUE);
 
 			// Branching
-			shared_ptr<BranchInst> branch_inst = std::make_shared<BranchInst>();
-			branch_inst->cond = *cond_expr;
-			branch_inst->true_block = body_blocks.blocks.front();
-			branch_inst->false_block = following_blocks.blocks.front();
-			cond_expr_blocks.blocks.back()->term_inst = std::move(branch_inst);
+			shared_ptr<BranchInst> branch_inst1 = std::make_shared<BranchInst>();
+			branch_inst1->cond = *cond_expr1;
+			branch_inst1->true_block = body_blocks.blocks.front();
+			branch_inst1->false_block = following_blocks.blocks.front();
+			shared_ptr<BranchInst> branch_inst2 = std::make_shared<BranchInst>();
+			branch_inst2->cond = *cond_expr2;
+			branch_inst2->true_block = body_blocks.blocks.front();
+			branch_inst2->false_block = following_blocks.blocks.front();
+			cond_expr_blocks1.blocks.back()->term_inst = std::move(branch_inst1);
+			cond_expr_blocks2.blocks.back()->term_inst = std::move(branch_inst2);
 			
 			// Merging
-			res.blocks << cond_expr_blocks.blocks;
+			res.blocks << cond_expr_blocks1.blocks;
 			res.blocks << body_blocks.blocks;
+			res.blocks << cond_expr_blocks2.blocks;
 			res.blocks << following_blocks.blocks;
 			return res;
 		}

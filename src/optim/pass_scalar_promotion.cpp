@@ -57,14 +57,14 @@ bool is_library_func(const string &func_name) {
 			func_name == "starttime" || func_name == "stoptime";
 }
 
-static void pass_scalar_promotion(Function &func, Block &cond_block) {
+static void pass_scalar_promotion(Function &func, Block &body_block) {
 	int num_blocks = func.blocks.blocks.size();
 	vector<shared_ptr<Block>> id2block(num_blocks);
 	for (auto &block : func.blocks.blocks) {
 		id2block[block->id] = block;
 	}
 	int while_id, lvl;
-	assert(sscanf(cond_block.name.c_str(), "while_cond_%d_lvl_%d", &while_id, &lvl) == 2);
+	assert(sscanf(body_block.name.c_str(), "while_body_%d_lvl_%d", &while_id, &lvl) == 2);
 
 	// Step 0. Construct the graph
 	vector<vector<int>> incoming_edges(num_blocks);
@@ -89,15 +89,17 @@ static void pass_scalar_promotion(Function &func, Block &cond_block) {
 	// Step 1. Identify all blocks in the current loop
 	vector<bool> in_loop(num_blocks, false);	// Whether there exists a path that goes back to the loop and pass the block
 
+	// printf("Loop %s\n", body_block.name.c_str());
 	{
 		std::queue<int> q;
-		q.push(cond_block.id);
-		in_loop[cond_block.id] = true;
+		q.push(body_block.id);
+		in_loop[body_block.id] = true;
 		while (!q.empty()) {
 			int cur = q.front();
 			q.pop();
+			// printf("%s\n", id2block[cur]->name.c_str());
 			for (int next : incoming_edges[cur]) {
-				if (cur == cond_block.id && next < cur)
+				if (cur == body_block.id && next < cur)
 					continue;
 				if (!in_loop[next]) {
 					in_loop[next] = true;
@@ -106,6 +108,7 @@ static void pass_scalar_promotion(Function &func, Block &cond_block) {
 			}
 		}
 	}
+
 
 	// Step 2. Collect all modified vars in the current loop
 	// "Modified var" refers to a variable that is assigned (appeared on the
@@ -276,7 +279,7 @@ static void pass_scalar_promotion(Function &func, Block &cond_block) {
 		} else if (ReturnInst *return_inst = dynamic_cast<ReturnInst*>(term_inst_ptr)) {
 			// Does not promote since the return value is only calculated once
 			// Wait, this block should not be in the loop!
-			assert(0);
+			// assert(0);
 		} else {
 			assert(0);
 		}
@@ -337,33 +340,40 @@ static void pass_scalar_promotion(Function &func, Block &cond_block) {
 	assign_inst_blocks->id = num_blocks;
 	assign_inst_blocks->name = format("while_%d_lvl_%d_precalc", while_id, lvl);
 	assign_inst_blocks->term_inst = std::make_shared<JumpInst>();
-	((JumpInst*)assign_inst_blocks->term_inst.get())->target_block = id2block[cond_block.id];
 
-	// Step 6. Insert the new block before while_cond block
+	// Step 6. Insert the new block before while_cond1 block
+	string while_cond1_name = format("while_cond1_%d_lvl_%d", while_id, lvl);
+	auto while_cond1_iter = func.blocks.blocks.end();
+	shared_ptr<Block> while_cond1_block;
 	for (auto iter = func.blocks.blocks.begin(); iter != func.blocks.blocks.end(); ) {
-		if ((*iter)->id == cond_block.id) {
-			iter = func.blocks.blocks.insert(iter, assign_inst_blocks);
+		if ((*iter)->name == while_cond1_name) {
+			while_cond1_block = *iter;
 			break;
 		} else {
 			iter = std::next(iter);
 		}
 	}
+	my_assert(40, while_cond1_block);
+
+	((JumpInst*)assign_inst_blocks->term_inst.get())->target_block = id2block[while_cond1_block->id];
+	func.blocks.blocks.insert(while_cond1_iter, assign_inst_blocks);
 
 	// Step 7. Reconnect all edges
-	for (int cur_id : incoming_edges[cond_block.id]) {
-		if (in_loop[cur_id]) continue;
+	int cond1_block_id = while_cond1_block->id;
+	for (int cur_id : incoming_edges[cond1_block_id]) {
+		assert (!in_loop[cur_id]);
 		auto &cur_block = id2block[cur_id];
 		TermInst* term_inst_ptr = cur_block->term_inst.get();
 		if (BranchInst *branch_inst = dynamic_cast<BranchInst*>(term_inst_ptr)) {
-			if (branch_inst->true_block->id == cond_block.id) {
+			if (branch_inst->true_block->id == cond1_block_id) {
 				branch_inst->true_block = assign_inst_blocks;
-			} else if (branch_inst->false_block->id == cond_block.id) {
+			} else if (branch_inst->false_block->id == cond1_block_id) {
 				branch_inst->false_block = assign_inst_blocks;
 			} else {
 				assert(0);
 			}
 		} else if (JumpInst *jump_inst = dynamic_cast<JumpInst*>(term_inst_ptr)) {
-			assert (jump_inst->target_block->id == cond_block.id);
+			assert (jump_inst->target_block->id == cond1_block_id);
 			jump_inst->target_block = assign_inst_blocks;
 		} else {
 			assert(0);
@@ -371,34 +381,34 @@ static void pass_scalar_promotion(Function &func, Block &cond_block) {
 	}
 
 	fprintf(stderr, "Block `%s`: %2d new vars, %2d merged exps, %2d cost reduction\n",
-		cond_block.name.c_str(), num_new_vars, num_merged_exps, sum_cost_reduction);
+		body_block.name.c_str(), num_new_vars, num_merged_exps, sum_cost_reduction);
 }
 
 static void pass_scalar_promotion(Function &func) {
-	// Step 1. Find out all while_cond blocks
-	// Since each while_cond block has at least 2 inputs and 2 outputs, it 
-	// should never be fused with other blocks
-	vector<pair<int, shared_ptr<Block>>> while_cond_blocks;	// (level, block)
+	// Step 1. Find out all while_body blocks
+	// Since each while_body block has at least 2 inputs, it 
+	// should never be (appendly) fused with other blocks
+	vector<pair<int, shared_ptr<Block>>> while_body_blocks;	// (level, block)
 	for (auto &block : func.blocks.blocks) {
-		if (is_start_with(block->name, "while_cond")) {
+		if (is_start_with(block->name, "while_body")) {
 			int while_id, lvl;
-			sscanf(block->name.c_str(), "while_cond_%d_lvl_%d", &while_id, &lvl);
-			while_cond_blocks.push_back({lvl, block});
+			assert(sscanf(block->name.c_str(), "while_body_%d_lvl_%d", &while_id, &lvl) == 2);
+			while_body_blocks.push_back({lvl, block});
 		}
 	}
 
 	// Step 2. Sort all whiles by their levels (in descending order)
-	std::sort(while_cond_blocks.begin(), while_cond_blocks.end(), [](const pair<int, shared_ptr<Block>> &a, const pair<int, shared_ptr<Block>> &b) {
+	std::sort(while_body_blocks.begin(), while_body_blocks.end(), [](const pair<int, shared_ptr<Block>> &a, const pair<int, shared_ptr<Block>> &b) {
 		return a.first > b.first;
 	});
 
 	// Step 3. Process each `while` separately
 	fprintf(stderr, "Function `%10s`: %2d whiles\n",
-		func.name.c_str(), (int)while_cond_blocks.size());
+		func.name.c_str(), (int)while_body_blocks.size());
 
-	for (auto &while_cond : while_cond_blocks) {
-		auto &cond_block = while_cond.second;
-		pass_scalar_promotion(func, *cond_block);
+	for (auto &while_body : while_body_blocks) {
+		auto &body_block = while_body.second;
+		pass_scalar_promotion(func, *body_block);
 	}
 }
 

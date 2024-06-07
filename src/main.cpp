@@ -87,7 +87,7 @@ int main(int argc, const char *argv[]) {
   // fprintf(stderr, "Running pass: collapse arrays...\n");
   KIRT::pass_collapse_arr(kirt);
 
-  KIRT::pass_block_fusion(kirt, false);
+  KIRT::pass_block_fusion(kirt, true);
   KIRT::pass_fill_block_id_name(kirt);  // Fill in id again since block fusion may delete blocks
 
   KIRT::pass_calc_global_dbs(kirt);
