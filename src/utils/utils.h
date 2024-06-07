@@ -21,6 +21,7 @@ public:
 	Counter() : count(0) {}
 	void reset(int val = 0) { count = val; }
 	int next() { return count++; }
+	int cur() { return count; }
 };
 
 // A function that wraps `sprintf` to return a `std::string`

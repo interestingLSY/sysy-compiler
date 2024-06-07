@@ -51,12 +51,6 @@ static constexpr int COST_THRES = 1;	// Only pre-calculate if the cost reduction
 static constexpr int ARRAY_LOAD_COST = 3;
 static constexpr int FUNC_CALL_COST = 100;
 
-bool is_library_func(const string &func_name) {
-	return func_name == "getint" || func_name == "getch" || func_name == "getarray" || \
-			func_name == "putint" || func_name == "putch" || func_name == "putarray"|| \
-			func_name == "starttime" || func_name == "stoptime";
-}
-
 static void pass_scalar_promotion(Function &func, Block &body_block) {
 	int num_blocks = func.blocks.blocks.size();
 	vector<shared_ptr<Block>> id2block(num_blocks);
@@ -202,7 +196,7 @@ static void pass_scalar_promotion(Function &func, Block &body_block) {
 
 	std::unordered_set<string> callee_touched_global_vars;
 	for (const string &callee : called_functions) {
-		for (const string &global_arr : KIRT::func2modified_global_arrs[callee]) {
+		for (const string &global_arr : KIRT::func2modified_global_vars[callee]) {
 			callee_touched_global_vars.insert(global_arr);
 		}
 	}
@@ -264,19 +258,9 @@ static void pass_scalar_promotion(Function &func, Block &body_block) {
 								add_precalc_exp(&arg, cost_reduction);
 							}
 						}
-						bool indirect_call_lib_func = false;
-						if (!is_library_func(exp.func_name)) {
-							for (const string &callee : KIRT::func2callees[exp.func_name]) {
-								if (is_library_func(callee)) {
-									indirect_call_lib_func = true;
-									break;
-								}
-							}
-						}
-						if (!has_non_pre_calcable_arg && KIRT::func2modified_global_arrs[exp.func_name].empty() && !is_library_func(exp.func_name) && !indirect_call_lib_func) {
-							// If the function and all functions it calls does not
-							// touch global vars, and it does not have any array
-							// arguments, we can pre-calculate it
+						if (!has_non_pre_calcable_arg && is_function_idempotent(exp.func_name)) {
+							// If the function is idempotent and all args can
+							// be promoted, we can pre-calculate it
 							bool have_arr_arg = false;
 							shared_ptr<Function> callee = KIRT::func_map[exp.func_name];
 							for (const FuncFParam &param : callee->fparams) {
@@ -350,8 +334,6 @@ static void pass_scalar_promotion(Function &func, Block &body_block) {
 			// Do nothing
 		} else if (ReturnInst *return_inst = dynamic_cast<ReturnInst*>(term_inst_ptr)) {
 			// Does not promote since the return value is only calculated once
-			// Wait, this block should not be in the loop!
-			// assert(0);
 		} else {
 			assert(0);
 		}

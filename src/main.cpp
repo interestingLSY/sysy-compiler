@@ -13,6 +13,7 @@
 #include "middleend/pass_fill_block_id_name.h"
 #include "optim/pass_block_fusion.h"
 #include "optim/pass_calc_global_dbs.h"
+#include "optim/pass_idempotent_func_promotion.h"
 #include "optim/pass_optim_exp_op.h"
 #include "optim/pass_unit_block_elim.h"
 #include "optim/pass_scalar_promotion.h"
@@ -96,6 +97,8 @@ int main(int argc, const char *argv[]) {
 
   KIRT::pass_scalar_promotion(kirt);
 
+  KIRT::pass_idempotent_func_promotion(kirt);
+  
   KIRT::pass_block_fusion(kirt, false);
   KIRT::pass_fill_block_id_name(kirt);
 

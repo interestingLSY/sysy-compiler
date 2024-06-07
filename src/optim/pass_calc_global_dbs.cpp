@@ -59,7 +59,7 @@ static void pass_put_direct_data(Function &func) {
 					traverse_exp(*assign_inst->lval.indices[0]);
 				}
 				if (KIRT::global_decl_map.count(assign_inst->lval.ident))
-					func2modified_global_arrs[func.name].insert(assign_inst->lval.ident);
+					func2modified_global_vars[func.name].insert(assign_inst->lval.ident);
 			} else if (auto exp_inst = dynamic_cast<ExpInst *>(inst.get())) {
 				traverse_exp(exp_inst->exp);
 			} else {
@@ -97,8 +97,8 @@ static void calc_func_callee_transitive_closure() {
 static void calc_other_dbs_transitive_closure() {
 	for (auto &func : func2callees) {
 		for (auto &callee : func.second) {
-			for (auto &global_arr : func2modified_global_arrs[callee]) {
-				func2modified_global_arrs[func.first].insert(global_arr);
+			for (auto &global_var : func2modified_global_vars[callee]) {
+				func2modified_global_vars[func.first].insert(global_var);
 			}
 		}
 	}

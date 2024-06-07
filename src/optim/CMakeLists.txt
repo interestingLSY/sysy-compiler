@@ -3,6 +3,7 @@ add_library(
 	optim_dbs.cpp
 	pass_block_fusion.cpp
 	pass_calc_global_dbs.cpp
+	pass_idempotent_func_promotion.cpp
 	pass_optim_exp_op.cpp
 	pass_scalar_promotion.cpp
 	pass_unit_block_elim.cpp
