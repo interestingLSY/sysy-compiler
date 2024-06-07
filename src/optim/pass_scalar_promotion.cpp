@@ -127,13 +127,85 @@ static void pass_scalar_promotion(Function &func, Block &body_block) {
 	}
 	// TODO Add support for array elements
 
+	// Step 2.5: Collect all called functions in the current loop
+	std::unordered_set<string> called_functions;
+	std::function<void(Exp&)> traverse_exp_collect_functions = [&](Exp &exp) {
+		exp_category_t exp_category = get_exp_category(exp.type);
+		switch (exp_category) {
+			case exp_category_t::NUMBER:
+				break;
+			case exp_category_t::SPECIAL:
+				switch (exp.type) {
+					case exp_t::LVAL:
+						for (auto &index : exp.lval.indices) {
+							traverse_exp_collect_functions(*index);
+						}
+					case exp_t::FUNC_CALL:
+						called_functions.insert(exp.func_name);
+						for (auto &arg : exp.args) {
+							traverse_exp_collect_functions(*arg);
+						}
+						break;
+					case exp_t::ARR_ADDR:
+						break;
+					default:
+						assert(0);
+				}
+				break;
+			case exp_category_t::UNARY:
+				traverse_exp_collect_functions(*exp.lhs);
+				break;
+			case exp_category_t::BINARY:
+				traverse_exp_collect_functions(*exp.lhs);
+				traverse_exp_collect_functions(*exp.rhs);
+				break;
+			default:
+				assert(0);
+		}
+	};
+	for (int i = 0; i < num_blocks; i++) {
+		if (!in_loop[i])
+			continue;
+		auto &block = id2block[i];
+		for (auto &inst : block->insts) {
+			if (AssignInst *assign_inst = dynamic_cast<AssignInst*>(inst.get())) {
+				traverse_exp_collect_functions(assign_inst->exp);
+				if (assign_inst->lval.is_arr()) {
+					traverse_exp_collect_functions(*assign_inst->lval.indices[0]);
+				}
+			} else if (ExpInst *exp_inst = dynamic_cast<ExpInst*>(inst.get())) {
+				traverse_exp_collect_functions(exp_inst->exp);
+			} else {
+				assert(0);
+			}
+		}
+		TermInst* term_inst_ptr = block->term_inst.get();
+		if (BranchInst *branch_inst = dynamic_cast<BranchInst*>(term_inst_ptr)) {
+			traverse_exp_collect_functions(branch_inst->cond);
+		} else if (JumpInst *jump_inst = dynamic_cast<JumpInst*>(term_inst_ptr)) {
+			// Do nothing
+		} else if (ReturnInst *return_inst = dynamic_cast<ReturnInst*>(term_inst_ptr)) {
+			// Does not promote since the return value is only calculated once
+			// Wait, this block should not be in the loop!
+			// assert(0);
+		} else {
+			assert(0);
+		}
+	}
+
 	// Step 3. Traverse along each `Exp`. Try our best to promote it
 	// Return (whether pre-calculable, cost-reduction)
-
 	vector<pair<shared_ptr<Exp>*, int>> precalcable_exps;	// (exp, cost)
 	auto add_precalc_exp = [&](std::shared_ptr<Exp> *exp, int cost) {
 		precalcable_exps.push_back({exp, cost});
 	};
+
+	std::unordered_set<string> callee_touched_global_vars;
+	for (const string &callee : called_functions) {
+		for (const string &global_arr : KIRT::func2modified_global_arrs[callee]) {
+			callee_touched_global_vars.insert(global_arr);
+		}
+	}
 
 	std::function<pair<bool, int>(Exp&)> traverse_exp_and_promote = [&](Exp &exp) -> pair<bool, int> {
 		exp_category_t exp_category = get_exp_category(exp.type);
@@ -144,10 +216,10 @@ static void pass_scalar_promotion(Function &func, Block &body_block) {
 			case exp_category_t::SPECIAL: {
 				switch (exp.type) {
 					case exp_t::LVAL: {
-						// Invalidate all global vars / arr that are modified
-						// TODO Preserve global vars if there is no function call
-						// TODO Preserve global vars if a call to a function does not modify it (need to be propagated)
-						if (KIRT::global_decl_map.count(exp.lval.ident))
+						// If the LVal is a global var, and it is modified by
+						// one of the callees in the loop, we cannot pre-calculate
+						// it
+						if (callee_touched_global_vars.count(exp.lval.ident))
 							return {false, 0};
 						if (exp.lval.is_int()) {
 							if (modified_vars.count(exp.lval.ident))
