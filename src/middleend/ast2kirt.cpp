@@ -715,8 +715,8 @@ BlockList ast2kirt(AST::BlockItem &block_item) {
 			AST::WhileStmt *while_stmt = dynamic_cast<AST::WhileStmt *>(cur_item);
 
 			// KIRT generation
-			auto [cond_expr2, cond_expr_blocks2] = ast2kirt(*while_stmt->cond);
 			auto [cond_expr1, cond_expr_blocks1] = ast2kirt(*while_stmt->cond);
+			auto [cond_expr2, cond_expr_blocks2] = ast2kirt(*while_stmt->cond);
 			BlockList body_blocks = ast2kirt_stmt_or_block(while_stmt->body);
 			BlockList following_blocks = block_item.recur ? ast2kirt(*block_item.recur) : get_unit_blocklist();
 

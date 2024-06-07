@@ -250,19 +250,32 @@ private:
 			my_assert(32, false);
 		}
 	}
-	void store_var_from_reg_simple(const string &ident, const string &reg) {
+	void store_var_from_reg_simple(
+		const string &ident,
+		const string &reg,
+		const std::optional<string> &hold_reg1 = std::nullopt,
+		const std::optional<string> &hold_reg2 = std::nullopt
+	) {
 		my_assert(34, ident != "0");
 		bool is_success = store_var_from_reg_simple_helper(ident, reg);
 		if (!is_success) {
 			// Must provide a temp register
-			string temp_reg = get_one_free_reg(is_leaf_func ? leaf_func_temp_var_regs : all_caller_saved_regs);
+			string temp_reg = get_one_free_reg(
+				is_leaf_func ? leaf_func_temp_var_regs : all_caller_saved_regs,
+				hold_reg1,
+				hold_reg2
+			);
 			is_success = store_var_from_reg_simple_helper(ident, reg, temp_reg);
 			assert(is_success);
 		}
 	}
 
 	// Evict a register and clear relevant data
-	void evict_reg(const string &reg) {
+	void evict_reg(
+		const string &reg,
+		const std::optional<string> &hold_reg1 = std::nullopt,
+		const std::optional<string> &hold_reg2 = std::nullopt
+	) {
 		if (is_pin_mode) {
 			// We should never evict local-var backended regs in pin mode
 			for (auto &[ident, meta] : var_meta_db) {
@@ -279,7 +292,7 @@ private:
 		VarMeta &meta = var_meta_db[ident];
 		if (meta.is_dirty) {
 			// Write back
-			store_var_from_reg_simple(ident, reg);
+			store_var_from_reg_simple(ident, reg, hold_reg1, hold_reg2);
 		}
 		assert(meta.corresp_reg.value() == reg);
 		meta.corresp_reg = nullopt;
@@ -414,18 +427,19 @@ public:
 	}
 
 	// Called when exiting from a blocktemp 
-	// Ignore `ignore_reg` if provided (useful for generating branching instructions)
-	void on_exit_block(const optional<string> &ignore_reg1 = nullopt, const optional<string> &ignore_reg2 = nullopt) {
-		auto is_ignored = [&](const string &reg) -> bool {
-			return (ignore_reg1.has_value() && reg == ignore_reg1.value()) ||
-				(ignore_reg2.has_value() && reg == ignore_reg2.value());
+	// Specify `branch_reg` if you don't want a variable to be touched (and not to
+	// be stored back for temp vars) when exiting the block
+	void on_exit_block(const optional<string> &branch_reg1 = nullopt, const optional<string> &branch_reg2 = nullopt) {
+		auto is_branch_reg = [&](const string &reg) -> bool {
+			return (branch_reg1.has_value() && reg == branch_reg1.value()) ||
+				(branch_reg2.has_value() && reg == branch_reg2.value());
 		};
 		if (is_pin_mode) {
 			// Pin mode. Evict temp vars and mark global vars
 			for (auto &[ident, meta] : var_meta_db) {
 				if (meta.corresp_reg.has_value()) {
 					if (meta.type == var_t::LOCAL_VAR && is_temp_var(ident)) {
-						if (!is_ignored(meta.corresp_reg.value()))
+						if (!is_branch_reg(meta.corresp_reg.value()))
 							evict_reg(meta.corresp_reg.value());
 					} else if (meta.type == var_t::GLOBAL_VAR) {
 						// Pin mode. Just write back without evicting
@@ -440,14 +454,15 @@ public:
 			}
 		} else {
 			// Evict all vars
-			for (const string &reg : all_caller_saved_regs) {
-				if (reg2var.count(reg) && !is_ignored(reg)) {
-					evict_reg(reg);
-				}
-			}
-			for (const string &reg : all_callee_saved_regs) {
-				if (reg2var.count(reg) && !is_ignored(reg)) {
-					evict_reg(reg);
+			vector<string> all_regs = all_callee_saved_regs;
+			all_regs.insert(all_regs.end(), all_caller_saved_regs.begin(), all_caller_saved_regs.end());
+			for (const string &reg : all_regs) {
+				if (reg2var.count(reg)) {
+					VarMeta &meta = var_meta_db[reg2var[reg]];
+					if (meta.type == var_t::LOCAL_VAR && is_temp_var(reg2var[reg]) &&
+						is_branch_reg(reg))
+						continue;
+					evict_reg(reg, branch_reg1, branch_reg2);
 				}
 			}
 		}
