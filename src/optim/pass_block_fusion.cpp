@@ -101,7 +101,7 @@ static void pass_block_fusion(Function &func, bool avoid_while) {
 	}
 	func.blocks.blocks = new_blocks;
 
-	fprintf(stderr, "Function `%s`: %d -> %lu (%.1f%%)\n",
+	fprintf(stderr, "Function `%10s`: %d -> %lu (%.1f%%)\n",
 			func.name.c_str(), num_blocks, func.blocks.blocks.size(),
 			100.0 * func.blocks.blocks.size() / num_blocks);
 }

@@ -218,7 +218,7 @@ static void pass_idempotent_func_promotion(Function &func) {
 	num_eliminated_calls = 0;
 	for (auto &block : func.blocks.blocks)
 		pass_idempotent_func_promotion(func, *block);
-	fprintf(stderr, "Function `%s` promoted %d idempotent functions calls to %d new vars\n",
+	fprintf(stderr, "Function `%10s` promoted %d idempotent functions calls to %d new vars\n",
 		func.name.c_str(), num_eliminated_calls, num_new_vars);
 }
 
