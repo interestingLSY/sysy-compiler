@@ -1132,8 +1132,9 @@ void kirt2asm(const KIRT::Block &cur_block, const shared_ptr<KIRT::TermInst> &in
 		string true_block_name = rename_block(branch_inst->true_block->name);
 		string false_block_name = rename_block(branch_inst->false_block->name);
 		string br_target, jmp_target;
-		int block_id_delta = branch_inst->false_block->id - branch_inst->true_block->id;
-		if (block_id_delta > 40 || branch_inst->false_block->id == cur_block.id + 1) {
+		bool force_jmp_to_true = abs(branch_inst->true_block->id - cur_block.id) > 40;
+		bool force_jmp_to_false = abs(branch_inst->false_block->id - cur_block.id) > 40;
+		if (force_jmp_to_false || (!force_jmp_to_true && branch_inst->false_block->id == cur_block.id + 1)) {
 			// Branch to true
 			br_target = true_block_name;
 			jmp_target = false_block_name;
