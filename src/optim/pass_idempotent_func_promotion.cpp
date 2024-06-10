@@ -178,7 +178,7 @@ static void pass_idempotent_func_promotion(Function &func, Block &block) {
 		num_eliminated_calls += num_calls;
 
 		string var_ident = format(
-			"%s_promoted_%s_%d",
+			"%%%s_promoted_%s_%d",
 			block.name.c_str(),
 			"_promoted_",
 			candi.func_ident.c_str(),
